@@ -8,6 +8,13 @@ pub struct Config {
     pub bloom_bits_per_key: usize,
     pub shard_count: usize,
     pub compaction_l0_threshold: usize,
+    // Phase 2 additions
+    pub compaction_l1_target_bytes: u64,
+    pub compaction_size_ratio: u64,
+    pub compaction_max_levels: usize,
+    pub sstable_max_file_bytes: u64,
+    pub block_cache_bytes: usize,
+    pub index_cache_entries: usize,
 }
 
 impl Default for Config {
@@ -19,6 +26,12 @@ impl Default for Config {
             bloom_bits_per_key: 10,
             shard_count: 4,
             compaction_l0_threshold: 8,
+            compaction_l1_target_bytes: 10 * 1024 * 1024,
+            compaction_size_ratio: 10,
+            compaction_max_levels: 7,
+            sstable_max_file_bytes: 64 * 1024 * 1024,
+            block_cache_bytes: 32 * 1024 * 1024,
+            index_cache_entries: 1024,
         }
     }
 }
@@ -51,6 +64,11 @@ impl Config {
         if self.compaction_l0_threshold == 0 {
             return Err(SpectraError::Config(
                 "compaction_l0_threshold must be > 0".to_string(),
+            ));
+        }
+        if self.compaction_max_levels < 2 {
+            return Err(SpectraError::Config(
+                "compaction_max_levels must be >= 2".to_string(),
             ));
         }
         Ok(())

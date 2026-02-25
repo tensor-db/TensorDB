@@ -8,11 +8,13 @@ use parking_lot::Mutex;
 
 use crate::config::Config;
 use crate::engine::shard::{
-    GetResult, PrefixScanResultRow, ShardCommand, ShardRuntime, ShardStats,
+    ChangeEvent, GetResult, PrefixScanResultRow, ShardCommand, ShardRuntime, ShardStats,
+    WriteBatchItem,
 };
 use crate::error::{Result, SpectraError};
 use crate::native_bridge::{build_hasher, Hasher};
 use crate::sql::exec::{execute_sql, SqlResult};
+use crate::storage::cache::{BlockCache, IndexCache};
 use crate::storage::manifest::Manifest;
 
 #[derive(Debug, Clone)]
@@ -101,6 +103,9 @@ impl Database {
         let manifest = Arc::new(Mutex::new(manifest));
         let hasher = build_hasher();
 
+        let block_cache = Arc::new(BlockCache::new(config.block_cache_bytes));
+        let index_cache = Arc::new(IndexCache::new(config.index_cache_entries));
+
         let mut shard_senders = Vec::with_capacity(config.shard_count);
         let mut shard_handles = Vec::with_capacity(config.shard_count);
 
@@ -118,6 +123,8 @@ impl Database {
                 hasher.clone(),
                 manifest.clone(),
                 shard_state,
+                block_cache.clone(),
+                index_cache.clone(),
             )?;
 
             let handle = thread::Builder::new()
@@ -248,6 +255,80 @@ impl Database {
             merged.truncate(limit);
         }
         Ok(merged)
+    }
+
+    pub fn write_batch(&self, entries: Vec<WriteBatchItem>) -> Result<Vec<u64>> {
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Group entries by shard
+        let mut by_shard: Vec<Vec<(usize, WriteBatchItem)>> =
+            (0..self.config.shard_count).map(|_| Vec::new()).collect();
+        for (orig_idx, entry) in entries.into_iter().enumerate() {
+            let shard_id = self.shard_for(&entry.user_key);
+            by_shard[shard_id].push((orig_idx, entry));
+        }
+
+        // Send batch commands to each shard
+        let mut receivers = Vec::new();
+        for (shard_id, shard_entries) in by_shard.into_iter().enumerate() {
+            if shard_entries.is_empty() {
+                continue;
+            }
+            let orig_indices: Vec<usize> = shard_entries.iter().map(|(i, _)| *i).collect();
+            let items: Vec<WriteBatchItem> =
+                shard_entries.into_iter().map(|(_, item)| item).collect();
+            let (tx, rx) = bounded(1);
+            self.shard_senders[shard_id]
+                .send(ShardCommand::WriteBatch {
+                    entries: items,
+                    resp: tx,
+                })
+                .map_err(|_| SpectraError::ChannelClosed)?;
+            receivers.push((orig_indices, rx));
+        }
+
+        // Collect results and reassemble in original order
+        let mut result = vec![0u64; receivers.iter().map(|(idxs, _)| idxs.len()).sum()];
+        // We need the total count - let's recount from receivers
+        let total: usize = receivers.iter().map(|(idxs, _)| idxs.len()).sum();
+        result.resize(total, 0);
+
+        // Actually we need to place by original index
+        let max_idx = receivers
+            .iter()
+            .flat_map(|(idxs, _)| idxs.iter())
+            .copied()
+            .max()
+            .unwrap_or(0);
+        result.resize(max_idx + 1, 0);
+
+        for (orig_indices, rx) in receivers {
+            let timestamps = rx.recv().map_err(|_| SpectraError::ChannelClosed)??;
+            for (i, ts) in orig_indices.into_iter().zip(timestamps) {
+                result[i] = ts;
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Subscribe to change events for keys matching a prefix.
+    /// Returns a receiver that will receive ChangeEvent for each write.
+    pub fn subscribe(
+        &self,
+        prefix: &[u8],
+    ) -> crossbeam_channel::Receiver<ChangeEvent> {
+        let (tx, rx) = unbounded();
+        // Fan out to all shards
+        for shard_tx in &self.shard_senders {
+            let _ = shard_tx.send(ShardCommand::Subscribe {
+                prefix: prefix.to_vec(),
+                sender: tx.clone(),
+            });
+        }
+        rx
     }
 
     pub fn sql(&self, query: &str) -> Result<SqlResult> {

@@ -6,6 +6,8 @@ edition = "2021"
 [features]
 default = []
 native = ["dep:spectradb-native"]
+simd = []
+io-uring = ["dep:io-uring"]
 
 [dependencies]
 thiserror = "1"
@@ -19,6 +21,7 @@ fastrand = "2"
 tracing = "0.1"
 
 spectradb-native = { path = "../spectradb-native", optional = true }
+io-uring = { version = "0.7", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

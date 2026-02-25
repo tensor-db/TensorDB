@@ -20,6 +20,8 @@ pub struct TableSchemaMetadata {
     pub doc: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<TableColumnMetadata>,
+    #[serde(default = "default_schema_mode")]
+    pub schema_mode: String,
 }
 
 impl Default for TableSchemaMetadata {
@@ -28,8 +30,13 @@ impl Default for TableSchemaMetadata {
             pk: default_pk_name(),
             doc: default_doc_type(),
             columns: Vec::new(),
+            schema_mode: default_schema_mode(),
         }
     }
+}
+
+fn default_schema_mode() -> String {
+    "legacy".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +192,7 @@ mod tests {
                     type_name: "json".to_string(),
                 },
             ],
+            schema_mode: "legacy".to_string(),
         };
         let bytes = encode_schema_metadata(&input).unwrap();
         let output = parse_schema_metadata(&bytes).unwrap();

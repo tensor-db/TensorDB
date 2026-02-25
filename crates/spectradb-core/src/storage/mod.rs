@@ -1,5 +1,8 @@
 pub mod bloom;
+pub mod cache;
+pub mod columnar;
 pub mod compaction;
+pub mod levels;
 pub mod manifest;
 pub mod memtable;
 pub mod sstable;

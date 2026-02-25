@@ -5,7 +5,7 @@ use crate::native_bridge::Hasher;
 use crate::storage::sstable::{build_sstable, SsTableReader};
 
 pub fn compact_l0(
-    readers: &[SsTableReader],
+    readers: &[&SsTableReader],
     out_path: impl AsRef<Path>,
     block_size: usize,
     bloom_bits_per_key: usize,

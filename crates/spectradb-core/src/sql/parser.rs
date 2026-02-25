@@ -1,12 +1,95 @@
 use crate::error::{Result, SpectraError};
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Expr {
+    Column(String),
+    FieldAccess { column: String, path: Vec<String> },
+    StringLit(String),
+    NumberLit(f64),
+    BoolLit(bool),
+    Null,
+    BinOp { left: Box<Expr>, op: BinOperator, right: Box<Expr> },
+    Not(Box<Expr>),
+    Function { name: String, args: Vec<Expr> },
+    Star,
+    IsNull { expr: Box<Expr>, negated: bool },
+    Between { expr: Box<Expr>, low: Box<Expr>, high: Box<Expr>, negated: bool },
+    InList { expr: Box<Expr>, list: Vec<Expr>, negated: bool },
+    WindowFunction {
+        name: String,
+        args: Vec<Expr>,
+        partition_by: Vec<Expr>,
+        order_by: Vec<(Expr, OrderDirection)>,
+    },
+}
+
+pub fn is_window_function(name: &str) -> bool {
+    matches!(
+        name.to_uppercase().as_str(),
+        "ROW_NUMBER" | "RANK" | "DENSE_RANK" | "LEAD" | "LAG"
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOperator {
+    Eq,
+    NotEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    And,
+    Or,
+    Like,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SelectItem {
+    Expr { expr: Expr, alias: Option<String> },
+    AllColumns,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JoinType {
+    Inner,
+    Left,
+    Right,
+    Cross,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinSpec {
+    pub join_type: JoinType,
+    pub right_table: String,
+    pub right_alias: Option<String>,
+    pub on_clause: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CteClause {
+    pub name: String,
+    pub query: Box<Statement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableRef {
+    Named(String),
+    Subquery { query: Box<Statement>, alias: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Begin,
     Commit,
     Rollback,
     CreateTable {
         table: String,
+        columns: Vec<ColumnDef>,
     },
     CreateView {
         view: String,
@@ -30,16 +113,47 @@ pub enum Statement {
         pk: String,
         doc: String,
     },
-    Select {
+    InsertTyped {
         table: String,
-        projection: SelectProjection,
-        join: Option<JoinSpec>,
-        pk_filter: Option<String>,
+        columns: Vec<String>,
+        values: Vec<Expr>,
+    },
+    Update {
+        table: String,
+        set_doc: Expr,
+        set_assignments: Vec<(String, Expr)>,
+        filter: Option<Expr>,
         as_of: Option<u64>,
         valid_at: Option<u64>,
-        group_by_pk: bool,
-        order_by_pk: Option<OrderDirection>,
+    },
+    Delete {
+        table: String,
+        filter: Option<Expr>,
+        as_of: Option<u64>,
+        valid_at: Option<u64>,
+    },
+    Select {
+        ctes: Vec<CteClause>,
+        from: TableRef,
+        items: Vec<SelectItem>,
+        join: Option<JoinSpec>,
+        filter: Option<Expr>,
+        as_of: Option<u64>,
+        valid_at: Option<u64>,
+        group_by: Option<Vec<Expr>>,
+        having: Option<Expr>,
+        order_by: Option<Vec<(Expr, OrderDirection)>>,
         limit: Option<u64>,
+    },
+    CopyTo {
+        table: String,
+        path: String,
+        format: CopyFormat,
+    },
+    CopyFrom {
+        table: String,
+        path: String,
+        format: CopyFormat,
     },
     ShowTables,
     Describe {
@@ -58,6 +172,63 @@ pub enum Statement {
     Explain(Box<Statement>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnDef {
+    pub name: String,
+    pub type_name: SqlType,
+    pub primary_key: bool,
+    pub not_null: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqlType {
+    Integer,
+    Real,
+    Text,
+    Boolean,
+    Blob,
+    Json,
+}
+
+impl SqlType {
+    pub fn from_str_name(s: &str) -> Option<SqlType> {
+        match s.to_uppercase().as_str() {
+            "INTEGER" | "INT" | "BIGINT" => Some(SqlType::Integer),
+            "REAL" | "FLOAT" | "DOUBLE" => Some(SqlType::Real),
+            "TEXT" | "VARCHAR" | "STRING" => Some(SqlType::Text),
+            "BOOLEAN" | "BOOL" => Some(SqlType::Boolean),
+            "BLOB" | "BYTES" => Some(SqlType::Blob),
+            "JSON" => Some(SqlType::Json),
+            _ => None,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            SqlType::Integer => "INTEGER",
+            SqlType::Real => "REAL",
+            SqlType::Text => "TEXT",
+            SqlType::Boolean => "BOOLEAN",
+            SqlType::Blob => "BLOB",
+            SqlType::Json => "JSON",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyFormat {
+    Csv,
+    Json,
+    Ndjson,
+}
+
+// Legacy re-exports for backward compatibility
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectProjection {
     Doc,
@@ -67,22 +238,15 @@ pub enum SelectProjection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JoinSpec {
-    pub right_table: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OrderDirection {
-    Asc,
-    Desc,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum Token {
     Ident(String),
-    Number(u64),
+    Number(String),  // Store as string to parse as both u64 and f64
     StringLit(String),
     Symbol(char),
+    // Multi-char operators
+    NotEq,      // !=
+    LtEq,       // <=
+    GtEq,       // >=
 }
 
 pub fn parse_sql(input: &str) -> Result<Statement> {
@@ -189,8 +353,14 @@ impl Parser {
         if self.peek_kw("INSERT") {
             return self.parse_insert();
         }
-        if self.peek_kw("SELECT") {
-            return self.parse_select();
+        if self.peek_kw("UPDATE") {
+            return self.parse_update();
+        }
+        if self.peek_kw("DELETE") {
+            return self.parse_delete();
+        }
+        if self.peek_kw("SELECT") || self.peek_kw("WITH") {
+            return self.parse_select_or_cte();
         }
         if self.peek_kw("SHOW") {
             return self.parse_show();
@@ -200,6 +370,9 @@ impl Parser {
         }
         if self.peek_kw("DROP") {
             return self.parse_drop();
+        }
+        if self.peek_kw("COPY") {
+            return self.parse_copy();
         }
         Err(SpectraError::SqlParse(
             "unsupported SQL statement".to_string(),
@@ -226,36 +399,90 @@ impl Parser {
         self.expect_kw("TABLE")?;
         let table = self.expect_ident()?;
         self.expect_symbol('(')?;
-        self.expect_ident_eq("pk")?;
-        self.expect_kw("TEXT")?;
-        self.expect_kw("PRIMARY")?;
-        self.expect_kw("KEY")?;
+
+        let mut columns = Vec::new();
+
+        // Parse column definitions
+        loop {
+            let col_name = self.expect_ident()?;
+            let type_name_str = self.expect_ident()?;
+            let type_name = SqlType::from_str_name(&type_name_str).ok_or_else(|| {
+                SpectraError::SqlParse(format!("unknown column type: {type_name_str}"))
+            })?;
+
+            let mut primary_key = false;
+            let mut not_null = false;
+
+            // Parse column constraints
+            loop {
+                if self.peek_kw("PRIMARY") {
+                    self.expect_kw("PRIMARY")?;
+                    self.expect_kw("KEY")?;
+                    primary_key = true;
+                } else if self.peek_kw("NOT") {
+                    self.expect_kw("NOT")?;
+                    self.expect_kw("NULL")?;
+                    not_null = true;
+                } else {
+                    break;
+                }
+            }
+
+            columns.push(ColumnDef {
+                name: col_name,
+                type_name,
+                primary_key,
+                not_null,
+            });
+
+            if self.peek_symbol(',') {
+                self.expect_symbol(',')?;
+            } else {
+                break;
+            }
+        }
         self.expect_symbol(')')?;
-        Ok(Statement::CreateTable { table })
+
+        Ok(Statement::CreateTable { table, columns })
     }
 
     fn parse_create_view_after_create(&mut self) -> Result<Statement> {
         self.expect_kw("VIEW")?;
         let view = self.expect_ident()?;
         self.expect_kw("AS")?;
-        let select = self.parse_select()?;
+        let select = self.parse_select_or_cte()?;
         let Statement::Select {
-            table: source,
-            projection,
+            from,
+            items,
             join,
-            pk_filter,
+            filter,
             as_of,
             valid_at,
-            group_by_pk,
-            order_by_pk,
+            group_by,
+            having: _,
+            order_by,
             limit,
+            ..
         } = select
         else {
             return Err(SpectraError::SqlParse(
                 "expected SELECT after CREATE VIEW ... AS".to_string(),
             ));
         };
-        if projection != SelectProjection::Doc {
+
+        let table = match &from {
+            TableRef::Named(t) => t.clone(),
+            _ => {
+                return Err(SpectraError::SqlParse(
+                    "CREATE VIEW requires simple table reference".to_string(),
+                ))
+            }
+        };
+
+        // Validate: must be SELECT doc FROM table WHERE pk='...'
+        let is_doc_projection = items.len() == 1
+            && matches!(&items[0], SelectItem::Expr { expr: Expr::Column(c), alias: None } if c.eq_ignore_ascii_case("doc"));
+        if !is_doc_projection {
             return Err(SpectraError::SqlParse(
                 "CREATE VIEW requires SELECT doc projection".to_string(),
             ));
@@ -265,10 +492,12 @@ impl Parser {
                 "CREATE VIEW does not support JOIN".to_string(),
             ));
         }
-        let pk = pk_filter.ok_or_else(|| {
+
+        let pk = extract_pk_eq_literal(filter.as_ref()).ok_or_else(|| {
             SpectraError::SqlParse("CREATE VIEW requires WHERE pk='...'".to_string())
         })?;
-        if group_by_pk || order_by_pk.is_some() || limit.is_some() {
+
+        if group_by.is_some() || order_by.is_some() || limit.is_some() {
             return Err(SpectraError::SqlParse(
                 "CREATE VIEW does not support GROUP BY, ORDER BY, or LIMIT".to_string(),
             ));
@@ -276,7 +505,7 @@ impl Parser {
 
         Ok(Statement::CreateView {
             view,
-            source,
+            source: table,
             pk,
             as_of,
             valid_at,
@@ -318,17 +547,873 @@ impl Parser {
         self.expect_kw("INTO")?;
         let table = self.expect_ident()?;
         self.expect_symbol('(')?;
-        self.expect_ident_eq("pk")?;
-        self.expect_symbol(',')?;
-        self.expect_ident_eq("doc")?;
+
+        // Collect column names
+        let mut col_names = Vec::new();
+        col_names.push(self.expect_ident()?);
+        while self.peek_symbol(',') {
+            self.expect_symbol(',')?;
+            col_names.push(self.expect_ident()?);
+        }
         self.expect_symbol(')')?;
+
         self.expect_kw("VALUES")?;
         self.expect_symbol('(')?;
-        let pk = self.expect_string()?;
-        self.expect_symbol(',')?;
-        let doc = self.expect_string()?;
+
+        // Check if this is the legacy (pk, doc) form
+        if col_names.len() == 2
+            && col_names[0].eq_ignore_ascii_case("pk")
+            && col_names[1].eq_ignore_ascii_case("doc")
+        {
+            let pk = self.expect_string()?;
+            self.expect_symbol(',')?;
+            let doc = self.expect_string()?;
+            self.expect_symbol(')')?;
+            return Ok(Statement::Insert { table, pk, doc });
+        }
+
+        // Typed insert: collect value expressions
+        let mut values = Vec::new();
+        values.push(self.parse_expr()?);
+        while self.peek_symbol(',') {
+            self.expect_symbol(',')?;
+            values.push(self.parse_expr()?);
+        }
         self.expect_symbol(')')?;
-        Ok(Statement::Insert { table, pk, doc })
+
+        if col_names.len() != values.len() {
+            return Err(SpectraError::SqlParse(
+                "column count does not match value count".to_string(),
+            ));
+        }
+
+        Ok(Statement::InsertTyped {
+            table,
+            columns: col_names,
+            values,
+        })
+    }
+
+    fn parse_update(&mut self) -> Result<Statement> {
+        self.expect_kw("UPDATE")?;
+        let table = self.expect_ident()?;
+        self.expect_kw("SET")?;
+
+        let mut set_doc = None;
+        let mut set_assignments = Vec::new();
+
+        // Parse SET clause: either `doc = '...'` or `col1 = expr, col2 = expr, ...`
+        let first_col = self.expect_ident()?;
+        self.expect_symbol('=')?;
+        let first_val = self.parse_expr()?;
+
+        if first_col.eq_ignore_ascii_case("doc") {
+            set_doc = Some(first_val);
+        } else {
+            set_assignments.push((first_col, first_val));
+        }
+
+        while self.peek_symbol(',') {
+            self.expect_symbol(',')?;
+            let col = self.expect_ident()?;
+            self.expect_symbol('=')?;
+            let val = self.parse_expr()?;
+            set_assignments.push((col, val));
+        }
+
+        let filter = if self.peek_kw("WHERE") {
+            self.expect_kw("WHERE")?;
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        let mut as_of = None;
+        let mut valid_at = None;
+        self.parse_temporal_clauses(&mut as_of, &mut valid_at)?;
+
+        Ok(Statement::Update {
+            table,
+            set_doc: set_doc.unwrap_or(Expr::Null),
+            set_assignments,
+            filter,
+            as_of,
+            valid_at,
+        })
+    }
+
+    fn parse_delete(&mut self) -> Result<Statement> {
+        self.expect_kw("DELETE")?;
+        self.expect_kw("FROM")?;
+        let table = self.expect_ident()?;
+
+        let filter = if self.peek_kw("WHERE") {
+            self.expect_kw("WHERE")?;
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        let mut as_of = None;
+        let mut valid_at = None;
+        self.parse_temporal_clauses(&mut as_of, &mut valid_at)?;
+
+        Ok(Statement::Delete {
+            table,
+            filter,
+            as_of,
+            valid_at,
+        })
+    }
+
+    fn parse_select_or_cte(&mut self) -> Result<Statement> {
+        let mut ctes = Vec::new();
+        if self.peek_kw("WITH") {
+            self.expect_kw("WITH")?;
+            loop {
+                let name = self.expect_ident()?;
+                self.expect_kw("AS")?;
+                self.expect_symbol('(')?;
+                let query = self.parse_select_or_cte()?;
+                self.expect_symbol(')')?;
+                ctes.push(CteClause {
+                    name,
+                    query: Box::new(query),
+                });
+                if self.peek_symbol(',') {
+                    self.expect_symbol(',')?;
+                } else {
+                    break;
+                }
+            }
+        }
+        self.parse_select_inner(ctes)
+    }
+
+    fn parse_select_inner(&mut self, ctes: Vec<CteClause>) -> Result<Statement> {
+        self.expect_kw("SELECT")?;
+
+        // Parse select items
+        let mut items = Vec::new();
+        items.push(self.parse_select_item()?);
+        while self.peek_symbol(',') {
+            self.expect_symbol(',')?;
+            items.push(self.parse_select_item()?);
+        }
+
+        self.expect_kw("FROM")?;
+        let from = self.parse_table_ref()?;
+
+        // Parse JOIN
+        let join = self.try_parse_join(&from)?;
+
+        // Parse WHERE
+        let filter = if self.peek_kw("WHERE") {
+            self.expect_kw("WHERE")?;
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        let mut as_of = None;
+        let mut valid_at = None;
+        let mut group_by = None;
+        let mut having = None;
+        let mut order_by = None;
+        let mut limit = None;
+
+        loop {
+            if self.peek_kw("AS") && self.peek_kw_at(1, "OF") {
+                if as_of.is_some() {
+                    return Err(SpectraError::SqlParse(
+                        "AS OF specified more than once".to_string(),
+                    ));
+                }
+                self.expect_kw("AS")?;
+                self.expect_kw("OF")?;
+                as_of = Some(self.expect_number_u64()?);
+                continue;
+            }
+
+            if self.peek_kw("VALID") {
+                if valid_at.is_some() {
+                    return Err(SpectraError::SqlParse(
+                        "VALID AT specified more than once".to_string(),
+                    ));
+                }
+                self.expect_kw("VALID")?;
+                self.expect_kw("AT")?;
+                valid_at = Some(self.expect_number_u64()?);
+                continue;
+            }
+
+            if self.peek_kw("GROUP") {
+                if group_by.is_some() {
+                    return Err(SpectraError::SqlParse(
+                        "GROUP BY specified more than once".to_string(),
+                    ));
+                }
+                self.expect_kw("GROUP")?;
+                self.expect_kw("BY")?;
+                let mut exprs = Vec::new();
+                exprs.push(self.parse_expr()?);
+                while self.peek_symbol(',') {
+                    self.expect_symbol(',')?;
+                    exprs.push(self.parse_expr()?);
+                }
+                group_by = Some(exprs);
+                continue;
+            }
+
+            if self.peek_kw("HAVING") {
+                if having.is_some() {
+                    return Err(SpectraError::SqlParse(
+                        "HAVING specified more than once".to_string(),
+                    ));
+                }
+                if group_by.is_none() {
+                    return Err(SpectraError::SqlParse(
+                        "HAVING requires GROUP BY".to_string(),
+                    ));
+                }
+                self.expect_kw("HAVING")?;
+                having = Some(self.parse_expr()?);
+                continue;
+            }
+
+            if self.peek_kw("ORDER") {
+                if order_by.is_some() {
+                    return Err(SpectraError::SqlParse(
+                        "ORDER BY specified more than once".to_string(),
+                    ));
+                }
+                self.expect_kw("ORDER")?;
+                self.expect_kw("BY")?;
+                let mut orders = Vec::new();
+                loop {
+                    let expr = self.parse_expr()?;
+                    let direction = if self.peek_kw("DESC") {
+                        self.expect_kw("DESC")?;
+                        OrderDirection::Desc
+                    } else {
+                        if self.peek_kw("ASC") {
+                            self.expect_kw("ASC")?;
+                        }
+                        OrderDirection::Asc
+                    };
+                    orders.push((expr, direction));
+                    if self.peek_symbol(',') {
+                        self.expect_symbol(',')?;
+                    } else {
+                        break;
+                    }
+                }
+                order_by = Some(orders);
+                continue;
+            }
+
+            if self.peek_kw("LIMIT") {
+                if limit.is_some() {
+                    return Err(SpectraError::SqlParse(
+                        "LIMIT specified more than once".to_string(),
+                    ));
+                }
+                self.expect_kw("LIMIT")?;
+                limit = Some(self.expect_number_u64()?);
+                continue;
+            }
+
+            break;
+        }
+
+        Ok(Statement::Select {
+            ctes,
+            from,
+            items,
+            join,
+            filter,
+            as_of,
+            valid_at,
+            group_by,
+            having,
+            order_by,
+            limit,
+        })
+    }
+
+    fn parse_select_item(&mut self) -> Result<SelectItem> {
+        if self.peek_symbol('*') {
+            self.expect_symbol('*')?;
+            return Ok(SelectItem::AllColumns);
+        }
+
+        let expr = self.parse_expr()?;
+        let alias = if self.peek_kw("AS") {
+            self.expect_kw("AS")?;
+            Some(self.expect_ident()?)
+        } else if self.peek_ident() && !self.peek_kw("FROM") {
+            // Implicit alias (no AS keyword) only if next is identifier not FROM
+            // Actually, don't do implicit aliases - they create ambiguity
+            None
+        } else {
+            None
+        };
+
+        Ok(SelectItem::Expr { expr, alias })
+    }
+
+    fn parse_table_ref(&mut self) -> Result<TableRef> {
+        if self.peek_symbol('(') {
+            self.expect_symbol('(')?;
+            let query = self.parse_select_or_cte()?;
+            self.expect_symbol(')')?;
+            let alias = if self.peek_kw("AS") {
+                self.expect_kw("AS")?;
+                self.expect_ident()?
+            } else {
+                self.expect_ident()?
+            };
+            Ok(TableRef::Subquery {
+                query: Box::new(query),
+                alias,
+            })
+        } else {
+            let name = self.expect_ident()?;
+            Ok(TableRef::Named(name))
+        }
+    }
+
+    fn try_parse_join(&mut self, left_table: &TableRef) -> Result<Option<JoinSpec>> {
+        let join_type = if self.peek_kw("JOIN") || self.peek_kw("INNER") {
+            if self.peek_kw("INNER") {
+                self.expect_kw("INNER")?;
+            }
+            self.expect_kw("JOIN")?;
+            JoinType::Inner
+        } else if self.peek_kw("LEFT") {
+            self.expect_kw("LEFT")?;
+            if self.peek_kw("OUTER") {
+                self.expect_kw("OUTER")?;
+            }
+            self.expect_kw("JOIN")?;
+            JoinType::Left
+        } else if self.peek_kw("RIGHT") {
+            self.expect_kw("RIGHT")?;
+            if self.peek_kw("OUTER") {
+                self.expect_kw("OUTER")?;
+            }
+            self.expect_kw("JOIN")?;
+            JoinType::Right
+        } else if self.peek_kw("CROSS") {
+            self.expect_kw("CROSS")?;
+            self.expect_kw("JOIN")?;
+            JoinType::Cross
+        } else {
+            return Ok(None);
+        };
+
+        let right_table = self.expect_ident()?;
+        let right_alias = None;
+
+        let on_clause = if join_type == JoinType::Cross {
+            None
+        } else if self.peek_kw("ON") {
+            self.expect_kw("ON")?;
+
+            // Try parsing the old simple form: pk, left_t.pk=right_t.pk
+            let saved = self.i;
+            if self.peek_kw("PK") {
+                self.expect_ident_eq("pk")?;
+                // Old-style: just "pk" means pk=pk
+                let left_name = match left_table {
+                    TableRef::Named(n) => n.clone(),
+                    _ => "left".to_string(),
+                };
+                Some(Expr::BinOp {
+                    left: Box::new(Expr::FieldAccess {
+                        column: left_name,
+                        path: vec!["pk".to_string()],
+                    }),
+                    op: BinOperator::Eq,
+                    right: Box::new(Expr::FieldAccess {
+                        column: right_table.clone(),
+                        path: vec!["pk".to_string()],
+                    }),
+                })
+            } else {
+                // Try to parse as expression
+                self.i = saved;
+                Some(self.parse_expr()?)
+            }
+        } else {
+            None
+        };
+
+        Ok(Some(JoinSpec {
+            join_type,
+            right_table,
+            right_alias,
+            on_clause,
+        }))
+    }
+
+    fn parse_temporal_clauses(
+        &mut self,
+        as_of: &mut Option<u64>,
+        valid_at: &mut Option<u64>,
+    ) -> Result<()> {
+        loop {
+            if self.peek_kw("AS") && self.peek_kw_at(1, "OF") {
+                self.expect_kw("AS")?;
+                self.expect_kw("OF")?;
+                *as_of = Some(self.expect_number_u64()?);
+                continue;
+            }
+            if self.peek_kw("VALID") {
+                self.expect_kw("VALID")?;
+                self.expect_kw("AT")?;
+                *valid_at = Some(self.expect_number_u64()?);
+                continue;
+            }
+            break;
+        }
+        Ok(())
+    }
+
+    // Expression parser: precedence climbing
+    // Low to high: OR → AND → NOT → comparison → addition → multiplication → unary → primary
+
+    fn parse_expr(&mut self) -> Result<Expr> {
+        self.parse_or_expr()
+    }
+
+    fn parse_or_expr(&mut self) -> Result<Expr> {
+        let mut left = self.parse_and_expr()?;
+        while self.peek_kw("OR") {
+            self.expect_kw("OR")?;
+            let right = self.parse_and_expr()?;
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op: BinOperator::Or,
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_and_expr(&mut self) -> Result<Expr> {
+        let mut left = self.parse_not_expr()?;
+        while self.peek_kw("AND") {
+            self.expect_kw("AND")?;
+            let right = self.parse_not_expr()?;
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op: BinOperator::And,
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_not_expr(&mut self) -> Result<Expr> {
+        if self.peek_kw("NOT") {
+            self.expect_kw("NOT")?;
+            let inner = self.parse_not_expr()?;
+            return Ok(Expr::Not(Box::new(inner)));
+        }
+        self.parse_comparison()
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expr> {
+        let left = self.parse_addition()?;
+
+        // IS NULL / IS NOT NULL
+        if self.peek_kw("IS") {
+            self.expect_kw("IS")?;
+            let negated = if self.peek_kw("NOT") {
+                self.expect_kw("NOT")?;
+                true
+            } else {
+                false
+            };
+            self.expect_kw("NULL")?;
+            return Ok(Expr::IsNull {
+                expr: Box::new(left),
+                negated,
+            });
+        }
+
+        // NOT BETWEEN / NOT IN / NOT LIKE
+        if self.peek_kw("NOT") {
+            let saved = self.i;
+            self.expect_kw("NOT")?;
+            if self.peek_kw("BETWEEN") {
+                self.expect_kw("BETWEEN")?;
+                let low = self.parse_addition()?;
+                self.expect_kw("AND")?;
+                let high = self.parse_addition()?;
+                return Ok(Expr::Between {
+                    expr: Box::new(left),
+                    low: Box::new(low),
+                    high: Box::new(high),
+                    negated: true,
+                });
+            }
+            if self.peek_kw("IN") {
+                self.expect_kw("IN")?;
+                self.expect_symbol('(')?;
+                let mut list = Vec::new();
+                list.push(self.parse_expr()?);
+                while self.peek_symbol(',') {
+                    self.expect_symbol(',')?;
+                    list.push(self.parse_expr()?);
+                }
+                self.expect_symbol(')')?;
+                return Ok(Expr::InList {
+                    expr: Box::new(left),
+                    list,
+                    negated: true,
+                });
+            }
+            if self.peek_kw("LIKE") {
+                self.expect_kw("LIKE")?;
+                let right = self.parse_addition()?;
+                return Ok(Expr::Not(Box::new(Expr::BinOp {
+                    left: Box::new(left),
+                    op: BinOperator::Like,
+                    right: Box::new(right),
+                })));
+            }
+            self.i = saved;
+        }
+
+        // BETWEEN
+        if self.peek_kw("BETWEEN") {
+            self.expect_kw("BETWEEN")?;
+            let low = self.parse_addition()?;
+            self.expect_kw("AND")?;
+            let high = self.parse_addition()?;
+            return Ok(Expr::Between {
+                expr: Box::new(left),
+                low: Box::new(low),
+                high: Box::new(high),
+                negated: false,
+            });
+        }
+
+        // IN
+        if self.peek_kw("IN") {
+            self.expect_kw("IN")?;
+            self.expect_symbol('(')?;
+            let mut list = Vec::new();
+            list.push(self.parse_expr()?);
+            while self.peek_symbol(',') {
+                self.expect_symbol(',')?;
+                list.push(self.parse_expr()?);
+            }
+            self.expect_symbol(')')?;
+            return Ok(Expr::InList {
+                expr: Box::new(left),
+                list,
+                negated: false,
+            });
+        }
+
+        // LIKE
+        if self.peek_kw("LIKE") {
+            self.expect_kw("LIKE")?;
+            let right = self.parse_addition()?;
+            return Ok(Expr::BinOp {
+                left: Box::new(left),
+                op: BinOperator::Like,
+                right: Box::new(right),
+            });
+        }
+
+        // Standard comparison operators
+        if let Some(op) = self.peek_comparison_op() {
+            self.consume_comparison_op()?;
+            let right = self.parse_addition()?;
+            return Ok(Expr::BinOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            });
+        }
+
+        Ok(left)
+    }
+
+    fn parse_addition(&mut self) -> Result<Expr> {
+        let mut left = self.parse_multiplication()?;
+        loop {
+            if self.peek_symbol('+') {
+                self.expect_symbol('+')?;
+                let right = self.parse_multiplication()?;
+                left = Expr::BinOp {
+                    left: Box::new(left),
+                    op: BinOperator::Add,
+                    right: Box::new(right),
+                };
+            } else if self.peek_symbol('-') {
+                self.expect_symbol('-')?;
+                let right = self.parse_multiplication()?;
+                left = Expr::BinOp {
+                    left: Box::new(left),
+                    op: BinOperator::Sub,
+                    right: Box::new(right),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_multiplication(&mut self) -> Result<Expr> {
+        let mut left = self.parse_unary()?;
+        loop {
+            if self.peek_symbol('/') {
+                self.expect_symbol('/')?;
+                let right = self.parse_unary()?;
+                left = Expr::BinOp {
+                    left: Box::new(left),
+                    op: BinOperator::Div,
+                    right: Box::new(right),
+                };
+            } else if self.peek_symbol('%') {
+                self.expect_symbol('%')?;
+                let right = self.parse_unary()?;
+                left = Expr::BinOp {
+                    left: Box::new(left),
+                    op: BinOperator::Mod,
+                    right: Box::new(right),
+                };
+            } else {
+                // Note: * is handled carefully - only as multiply if preceded by expression
+                // The tricky part is distinguishing SELECT * FROM ... from SELECT 2 * 3
+                // In multiplication context, * after an expression is always multiply
+                if self.peek_symbol('*') && !self.peek_kw_at(1, "FROM") {
+                    // Check if next-next is something that looks like part of an expression
+                    // or if we're in a multiplication context
+                    // For safety, we only treat * as multiply in parse_multiplication
+                    self.expect_symbol('*')?;
+                    let right = self.parse_unary()?;
+                    left = Expr::BinOp {
+                        left: Box::new(left),
+                        op: BinOperator::Mul,
+                        right: Box::new(right),
+                    };
+                } else {
+                    break;
+                }
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_unary(&mut self) -> Result<Expr> {
+        if self.peek_symbol('-') {
+            self.expect_symbol('-')?;
+            let inner = self.parse_primary()?;
+            return Ok(Expr::BinOp {
+                left: Box::new(Expr::NumberLit(0.0)),
+                op: BinOperator::Sub,
+                right: Box::new(inner),
+            });
+        }
+        self.parse_primary()
+    }
+
+    fn parse_primary(&mut self) -> Result<Expr> {
+        // Parenthesized expression
+        if self.peek_symbol('(') {
+            self.expect_symbol('(')?;
+            let expr = self.parse_expr()?;
+            self.expect_symbol(')')?;
+            return Ok(expr);
+        }
+
+        // Star
+        if self.peek_symbol('*') {
+            self.expect_symbol('*')?;
+            return Ok(Expr::Star);
+        }
+
+        // String literal
+        if let Some(Token::StringLit(_)) = self.toks.get(self.i) {
+            let s = self.expect_string()?;
+            return Ok(Expr::StringLit(s));
+        }
+
+        // Number literal
+        if let Some(Token::Number(_)) = self.toks.get(self.i) {
+            let n = self.expect_number_f64()?;
+            return Ok(Expr::NumberLit(n));
+        }
+
+        // Boolean and NULL literals
+        if self.peek_kw("TRUE") {
+            self.expect_kw("TRUE")?;
+            return Ok(Expr::BoolLit(true));
+        }
+        if self.peek_kw("FALSE") {
+            self.expect_kw("FALSE")?;
+            return Ok(Expr::BoolLit(false));
+        }
+        if self.peek_kw("NULL") {
+            self.expect_kw("NULL")?;
+            return Ok(Expr::Null);
+        }
+
+        // MATCH(field, 'query') for FTS
+        if self.peek_kw("MATCH") {
+            self.expect_kw("MATCH")?;
+            self.expect_symbol('(')?;
+            let mut args = Vec::new();
+            args.push(self.parse_expr()?);
+            while self.peek_symbol(',') {
+                self.expect_symbol(',')?;
+                args.push(self.parse_expr()?);
+            }
+            self.expect_symbol(')')?;
+            return Ok(Expr::Function {
+                name: "MATCH".to_string(),
+                args,
+            });
+        }
+
+        // Identifier: could be column, function call, or qualified reference
+        if self.peek_ident() {
+            let ident = self.expect_ident()?;
+
+            // Function call: ident(...)
+            if self.peek_symbol('(') {
+                self.expect_symbol('(')?;
+                let mut args = Vec::new();
+                if !self.peek_symbol(')') {
+                    args.push(self.parse_expr()?);
+                    while self.peek_symbol(',') {
+                        self.expect_symbol(',')?;
+                        args.push(self.parse_expr()?);
+                    }
+                }
+                self.expect_symbol(')')?;
+
+                // Check for OVER clause (window function)
+                if self.peek_kw("OVER") {
+                    self.expect_kw("OVER")?;
+                    self.expect_symbol('(')?;
+                    let mut partition_by = Vec::new();
+                    let mut win_order_by = Vec::new();
+
+                    if self.peek_kw("PARTITION") {
+                        self.expect_kw("PARTITION")?;
+                        self.expect_kw("BY")?;
+                        partition_by.push(self.parse_expr()?);
+                        while self.peek_symbol(',') {
+                            self.expect_symbol(',')?;
+                            partition_by.push(self.parse_expr()?);
+                        }
+                    }
+
+                    if self.peek_kw("ORDER") {
+                        self.expect_kw("ORDER")?;
+                        self.expect_kw("BY")?;
+                        let expr = self.parse_expr()?;
+                        let dir = if self.peek_kw("DESC") {
+                            self.expect_kw("DESC")?;
+                            OrderDirection::Desc
+                        } else {
+                            if self.peek_kw("ASC") {
+                                self.expect_kw("ASC")?;
+                            }
+                            OrderDirection::Asc
+                        };
+                        win_order_by.push((expr, dir));
+                        while self.peek_symbol(',') {
+                            self.expect_symbol(',')?;
+                            let expr = self.parse_expr()?;
+                            let dir = if self.peek_kw("DESC") {
+                                self.expect_kw("DESC")?;
+                                OrderDirection::Desc
+                            } else {
+                                if self.peek_kw("ASC") {
+                                    self.expect_kw("ASC")?;
+                                }
+                                OrderDirection::Asc
+                            };
+                            win_order_by.push((expr, dir));
+                        }
+                    }
+
+                    self.expect_symbol(')')?;
+                    return Ok(Expr::WindowFunction {
+                        name: ident,
+                        args,
+                        partition_by,
+                        order_by: win_order_by,
+                    });
+                }
+
+                return Ok(Expr::Function {
+                    name: ident,
+                    args,
+                });
+            }
+
+            // Qualified reference: ident.field or ident.field.field
+            if self.peek_symbol('.') {
+                self.expect_symbol('.')?;
+                let mut path = Vec::new();
+                let field = self.expect_ident()?;
+                path.push(field);
+                while self.peek_symbol('.') {
+                    self.expect_symbol('.')?;
+                    path.push(self.expect_ident()?);
+                }
+                return Ok(Expr::FieldAccess {
+                    column: ident,
+                    path,
+                });
+            }
+
+            return Ok(Expr::Column(ident));
+        }
+
+        Err(SpectraError::SqlParse(format!(
+            "unexpected token in expression at position {}",
+            self.i
+        )))
+    }
+
+    fn peek_comparison_op(&self) -> Option<BinOperator> {
+        match self.toks.get(self.i) {
+            Some(Token::Symbol('=')) => Some(BinOperator::Eq),
+            Some(Token::NotEq) => Some(BinOperator::NotEq),
+            Some(Token::LtEq) => Some(BinOperator::LtEq),
+            Some(Token::GtEq) => Some(BinOperator::GtEq),
+            Some(Token::Symbol('<')) => Some(BinOperator::Lt),
+            Some(Token::Symbol('>')) => Some(BinOperator::Gt),
+            _ => None,
+        }
+    }
+
+    fn consume_comparison_op(&mut self) -> Result<()> {
+        match self.toks.get(self.i) {
+            Some(Token::Symbol('='))
+            | Some(Token::NotEq)
+            | Some(Token::LtEq)
+            | Some(Token::GtEq)
+            | Some(Token::Symbol('<'))
+            | Some(Token::Symbol('>')) => {
+                self.i += 1;
+                Ok(())
+            }
+            _ => Err(SpectraError::SqlParse(
+                "expected comparison operator".to_string(),
+            )),
+        }
     }
 
     fn parse_show(&mut self) -> Result<Statement> {
@@ -367,196 +1452,66 @@ impl Parser {
         ))
     }
 
-    fn parse_select(&mut self) -> Result<Statement> {
-        self.expect_kw("SELECT")?;
-        let projection = if self.peek_kw("DOC") {
-            self.expect_ident_eq("doc")?;
-            SelectProjection::Doc
-        } else if self.peek_kw("PK") {
-            self.expect_ident_eq("pk")?;
-            self.expect_symbol(',')?;
-            if self.peek_kw("DOC") {
-                self.expect_ident_eq("doc")?;
-                SelectProjection::PkDoc
-            } else if self.peek_kw("COUNT") {
-                self.expect_kw("COUNT")?;
-                self.expect_symbol('(')?;
-                self.expect_symbol('*')?;
-                self.expect_symbol(')')?;
-                SelectProjection::PkCount
-            } else {
-                return Err(SpectraError::SqlParse(
-                    "expected projection after pk,: doc or count(*)".to_string(),
-                ));
-            }
-        } else if self.peek_kw("COUNT") {
-            self.expect_kw("COUNT")?;
-            self.expect_symbol('(')?;
-            self.expect_symbol('*')?;
-            self.expect_symbol(')')?;
-            SelectProjection::CountStar
-        } else {
-            return Err(SpectraError::SqlParse(
-                "expected SELECT projection: doc, pk doc, pk count(*), or count(*)".to_string(),
-            ));
-        };
-        self.expect_kw("FROM")?;
+    fn parse_copy(&mut self) -> Result<Statement> {
+        self.expect_kw("COPY")?;
         let table = self.expect_ident()?;
 
-        let mut join = None;
-        if self.peek_kw("JOIN") {
-            self.expect_kw("JOIN")?;
-            let right_table = self.expect_ident()?;
-            self.expect_kw("ON")?;
-            self.parse_join_predicate(&table, &right_table)?;
-            join = Some(JoinSpec { right_table });
+        if self.peek_kw("TO") {
+            self.expect_kw("TO")?;
+            let path = self.expect_string()?;
+            let format = self.parse_copy_format()?;
+            Ok(Statement::CopyTo { table, path, format })
+        } else if self.peek_kw("FROM") {
+            self.expect_kw("FROM")?;
+            let path = self.expect_string()?;
+            let format = self.parse_copy_format()?;
+            Ok(Statement::CopyFrom { table, path, format })
+        } else {
+            Err(SpectraError::SqlParse(
+                "expected TO or FROM after COPY table".to_string(),
+            ))
         }
-
-        let mut pk_filter = None;
-        if self.peek_kw("WHERE") {
-            self.expect_kw("WHERE")?;
-            self.expect_ident_eq("pk")?;
-            self.expect_symbol('=')?;
-            pk_filter = Some(self.expect_string()?);
-        }
-
-        let mut as_of = None;
-        let mut valid_at = None;
-        let mut group_by_pk = false;
-        let mut order_by_pk = None;
-        let mut limit = None;
-
-        loop {
-            if self.peek_kw("AS") {
-                if as_of.is_some() {
-                    return Err(SpectraError::SqlParse(
-                        "AS OF specified more than once".to_string(),
-                    ));
-                }
-                self.expect_kw("AS")?;
-                self.expect_kw("OF")?;
-                as_of = Some(self.expect_number()?);
-                continue;
-            }
-
-            if self.peek_kw("VALID") {
-                if valid_at.is_some() {
-                    return Err(SpectraError::SqlParse(
-                        "VALID AT specified more than once".to_string(),
-                    ));
-                }
-                self.expect_kw("VALID")?;
-                self.expect_kw("AT")?;
-                valid_at = Some(self.expect_number()?);
-                continue;
-            }
-
-            if self.peek_kw("GROUP") {
-                if group_by_pk {
-                    return Err(SpectraError::SqlParse(
-                        "GROUP BY specified more than once".to_string(),
-                    ));
-                }
-                self.expect_kw("GROUP")?;
-                self.expect_kw("BY")?;
-                self.expect_ident_eq("pk")?;
-                group_by_pk = true;
-                continue;
-            }
-
-            if self.peek_kw("ORDER") {
-                if order_by_pk.is_some() {
-                    return Err(SpectraError::SqlParse(
-                        "ORDER BY specified more than once".to_string(),
-                    ));
-                }
-                self.expect_kw("ORDER")?;
-                self.expect_kw("BY")?;
-                self.expect_ident_eq("pk")?;
-                let direction = if self.peek_kw("DESC") {
-                    self.expect_kw("DESC")?;
-                    OrderDirection::Desc
-                } else {
-                    if self.peek_kw("ASC") {
-                        self.expect_kw("ASC")?;
-                    }
-                    OrderDirection::Asc
-                };
-                order_by_pk = Some(direction);
-                continue;
-            }
-
-            if self.peek_kw("LIMIT") {
-                if limit.is_some() {
-                    return Err(SpectraError::SqlParse(
-                        "LIMIT specified more than once".to_string(),
-                    ));
-                }
-                self.expect_kw("LIMIT")?;
-                limit = Some(self.expect_number()?);
-                continue;
-            }
-
-            break;
-        }
-
-        if projection == SelectProjection::PkCount && !group_by_pk {
-            return Err(SpectraError::SqlParse(
-                "pk, count(*) requires GROUP BY pk".to_string(),
-            ));
-        }
-        if group_by_pk && projection != SelectProjection::PkCount {
-            return Err(SpectraError::SqlParse(
-                "GROUP BY pk currently requires projection pk, count(*)".to_string(),
-            ));
-        }
-        if join.is_some() && projection == SelectProjection::Doc {
-            return Err(SpectraError::SqlParse(
-                "JOIN does not support SELECT doc projection".to_string(),
-            ));
-        }
-
-        Ok(Statement::Select {
-            table,
-            projection,
-            join,
-            pk_filter,
-            as_of,
-            valid_at,
-            group_by_pk,
-            order_by_pk,
-            limit,
-        })
     }
 
-    fn parse_join_predicate(&mut self, left: &str, right: &str) -> Result<()> {
-        if self.peek_kw("PK") {
-            self.expect_ident_eq("pk")?;
-            return Ok(());
+    fn parse_copy_format(&mut self) -> Result<CopyFormat> {
+        if self.peek_kw("WITH") {
+            self.expect_kw("WITH")?;
         }
-
-        let left_on = self.expect_ident()?;
-        if !left_on.eq_ignore_ascii_case(left) {
-            return Err(SpectraError::SqlParse(format!(
-                "JOIN predicate must start with {left}.pk"
-            )));
+        if self.peek_kw("FORMAT") {
+            self.expect_kw("FORMAT")?;
         }
-        self.expect_symbol('.')?;
-        self.expect_ident_eq("pk")?;
-        self.expect_symbol('=')?;
-        let right_on = self.expect_ident()?;
-        if !right_on.eq_ignore_ascii_case(right) {
-            return Err(SpectraError::SqlParse(format!(
-                "JOIN predicate must end with {right}.pk"
-            )));
+        if self.peek_kw("CSV") {
+            self.expect_kw("CSV")?;
+            return Ok(CopyFormat::Csv);
         }
-        self.expect_symbol('.')?;
-        self.expect_ident_eq("pk")?;
-        Ok(())
+        if self.peek_kw("JSON") {
+            self.expect_kw("JSON")?;
+            return Ok(CopyFormat::Json);
+        }
+        if self.peek_kw("NDJSON") {
+            self.expect_kw("NDJSON")?;
+            return Ok(CopyFormat::Ndjson);
+        }
+        // Default to CSV
+        Ok(CopyFormat::Csv)
     }
+
+    // ---- Token helpers ----
 
     fn peek_kw(&self, kw: &str) -> bool {
         matches!(self.toks.get(self.i), Some(Token::Ident(s)) if s.eq_ignore_ascii_case(kw))
+    }
+
+    fn peek_kw_at(&self, offset: usize, kw: &str) -> bool {
+        matches!(self.toks.get(self.i + offset), Some(Token::Ident(s)) if s.eq_ignore_ascii_case(kw))
+    }
+
+    fn peek_ident(&self) -> bool {
+        matches!(self.toks.get(self.i), Some(Token::Ident(_)))
+    }
+
+    fn peek_symbol(&self, sym: char) -> bool {
+        matches!(self.toks.get(self.i), Some(Token::Symbol(c)) if *c == sym)
     }
 
     fn expect_kw(&mut self, kw: &str) -> Result<()> {
@@ -612,16 +1567,107 @@ impl Parser {
         }
     }
 
-    fn expect_number(&mut self) -> Result<u64> {
+    fn expect_number_u64(&mut self) -> Result<u64> {
         match self.toks.get(self.i) {
-            Some(Token::Number(n)) => {
+            Some(Token::Number(s)) => {
+                let n = s.parse::<u64>().map_err(|_| {
+                    SpectraError::SqlParse("invalid number".to_string())
+                })?;
                 self.i += 1;
-                Ok(*n)
+                Ok(n)
             }
             _ => Err(SpectraError::SqlParse(
                 "expected numeric literal".to_string(),
             )),
         }
+    }
+
+    fn expect_number_f64(&mut self) -> Result<f64> {
+        match self.toks.get(self.i) {
+            Some(Token::Number(s)) => {
+                let n = s.parse::<f64>().map_err(|_| {
+                    SpectraError::SqlParse("invalid number".to_string())
+                })?;
+                self.i += 1;
+                Ok(n)
+            }
+            _ => Err(SpectraError::SqlParse(
+                "expected numeric literal".to_string(),
+            )),
+        }
+    }
+}
+
+pub fn extract_pk_eq_literal(expr: Option<&Expr>) -> Option<String> {
+    match expr? {
+        Expr::BinOp {
+            left,
+            op: BinOperator::Eq,
+            right,
+        } => {
+            // pk = 'literal'
+            if let (Expr::Column(col), Expr::StringLit(val)) = (left.as_ref(), right.as_ref()) {
+                if col.eq_ignore_ascii_case("pk") {
+                    return Some(val.clone());
+                }
+            }
+            // 'literal' = pk
+            if let (Expr::StringLit(val), Expr::Column(col)) = (left.as_ref(), right.as_ref()) {
+                if col.eq_ignore_ascii_case("pk") {
+                    return Some(val.clone());
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+pub fn is_aggregate_function(name: &str) -> bool {
+    matches!(
+        name.to_uppercase().as_str(),
+        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
+    )
+}
+
+pub fn select_items_contain_aggregate(items: &[SelectItem]) -> bool {
+    items.iter().any(|item| match item {
+        SelectItem::Expr { expr, .. } => expr_contains_aggregate(expr),
+        SelectItem::AllColumns => false,
+    })
+}
+
+pub fn select_items_contain_window(items: &[SelectItem]) -> bool {
+    items.iter().any(|item| match item {
+        SelectItem::Expr { expr, .. } => expr_contains_window(expr),
+        SelectItem::AllColumns => false,
+    })
+}
+
+fn expr_contains_window(expr: &Expr) -> bool {
+    match expr {
+        Expr::WindowFunction { .. } => true,
+        Expr::BinOp { left, right, .. } => {
+            expr_contains_window(left) || expr_contains_window(right)
+        }
+        Expr::Not(inner) => expr_contains_window(inner),
+        _ => false,
+    }
+}
+
+fn expr_contains_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Function { name, args } => {
+            if is_aggregate_function(name) {
+                return true;
+            }
+            args.iter().any(expr_contains_aggregate)
+        }
+        Expr::BinOp { left, right, .. } => {
+            expr_contains_aggregate(left) || expr_contains_aggregate(right)
+        }
+        Expr::Not(inner) => expr_contains_aggregate(inner),
+        _ => false,
     }
 }
 
@@ -636,7 +1682,30 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
             i += 1;
             continue;
         }
-        if "(),;=*.".contains(c) {
+
+        // Multi-character operators
+        if c == '!' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            out.push(Token::NotEq);
+            i += 2;
+            continue;
+        }
+        if c == '<' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            out.push(Token::LtEq);
+            i += 2;
+            continue;
+        }
+        if c == '>' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            out.push(Token::GtEq);
+            i += 2;
+            continue;
+        }
+        if c == '<' && i + 1 < chars.len() && chars[i + 1] == '>' {
+            out.push(Token::NotEq);
+            i += 2;
+            continue;
+        }
+
+        if "(),;=*.<>+-/%".contains(c) {
             out.push(Token::Symbol(c));
             i += 1;
             continue;
@@ -666,10 +1735,15 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
             while i < chars.len() && chars[i].is_ascii_digit() {
                 i += 1;
             }
-            let n: u64 = input[start..i]
-                .parse()
-                .map_err(|_| SpectraError::SqlParse("invalid number".to_string()))?;
-            out.push(Token::Number(n));
+            // Check for decimal point
+            if i < chars.len() && chars[i] == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+                i += 1; // skip the dot
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+            let num_str: String = chars[start..i].iter().collect();
+            out.push(Token::Number(num_str));
             continue;
         }
         if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
@@ -692,15 +1766,38 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_sql, split_sql_statements, JoinSpec, OrderDirection, SelectProjection, Statement,
-    };
+    use super::*;
 
     #[test]
     fn parses_begin_commit_rollback() {
         assert_eq!(parse_sql("BEGIN;").unwrap(), Statement::Begin);
         assert_eq!(parse_sql("COMMIT;").unwrap(), Statement::Commit);
         assert_eq!(parse_sql("ROLLBACK;").unwrap(), Statement::Rollback);
+    }
+
+    #[test]
+    fn parses_create_table_legacy() {
+        let stmt = parse_sql("CREATE TABLE users (pk TEXT PRIMARY KEY);").unwrap();
+        assert!(matches!(stmt, Statement::CreateTable { table, columns } if table == "users" && columns.len() == 1));
+    }
+
+    #[test]
+    fn parses_create_table_typed() {
+        let stmt = parse_sql("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, balance REAL);").unwrap();
+        if let Statement::CreateTable { table, columns } = stmt {
+            assert_eq!(table, "users");
+            assert_eq!(columns.len(), 3);
+            assert_eq!(columns[0].name, "id");
+            assert_eq!(columns[0].type_name, SqlType::Integer);
+            assert!(columns[0].primary_key);
+            assert_eq!(columns[1].name, "name");
+            assert_eq!(columns[1].type_name, SqlType::Text);
+            assert!(columns[1].not_null);
+            assert_eq!(columns[2].name, "balance");
+            assert_eq!(columns[2].type_name, SqlType::Real);
+        } else {
+            panic!("expected CreateTable");
+        }
     }
 
     #[test]
@@ -749,82 +1846,64 @@ mod tests {
     }
 
     #[test]
-    fn parses_select_from_identifier() {
-        let stmt = parse_sql("SELECT doc FROM v_orders WHERE pk='k1';").unwrap();
-        assert_eq!(
-            stmt,
-            Statement::Select {
-                table: "v_orders".to_string(),
-                projection: SelectProjection::Doc,
-                join: None,
-                pk_filter: Some("k1".to_string()),
-                as_of: None,
-                valid_at: None,
-                group_by_pk: false,
-                order_by_pk: None,
-                limit: None,
-            }
-        );
+    fn parses_select_with_where_expression() {
+        let stmt = parse_sql("SELECT doc FROM t WHERE pk = 'k1';").unwrap();
+        if let Statement::Select { filter, .. } = stmt {
+            assert!(filter.is_some());
+            let pk = extract_pk_eq_literal(filter.as_ref());
+            assert_eq!(pk, Some("k1".to_string()));
+        } else {
+            panic!("expected Select");
+        }
+    }
+
+    #[test]
+    fn parses_select_with_complex_where() {
+        let stmt = parse_sql("SELECT doc FROM t WHERE doc.balance > 100 AND pk = 'k1';").unwrap();
+        if let Statement::Select { filter, .. } = stmt {
+            assert!(filter.is_some());
+        } else {
+            panic!("expected Select");
+        }
     }
 
     #[test]
     fn parses_select_scan_with_order_and_limit() {
         let stmt = parse_sql("SELECT pk, doc FROM orders ORDER BY pk DESC LIMIT 10;").unwrap();
-        assert_eq!(
-            stmt,
-            Statement::Select {
-                table: "orders".to_string(),
-                projection: SelectProjection::PkDoc,
-                join: None,
-                pk_filter: None,
-                as_of: None,
-                valid_at: None,
-                group_by_pk: false,
-                order_by_pk: Some(OrderDirection::Desc),
-                limit: Some(10),
-            }
-        );
+        if let Statement::Select { order_by, limit, .. } = stmt {
+            assert!(order_by.is_some());
+            let orders = order_by.unwrap();
+            assert_eq!(orders.len(), 1);
+            assert_eq!(orders[0].1, OrderDirection::Desc);
+            assert_eq!(limit, Some(10));
+        } else {
+            panic!("expected Select");
+        }
     }
 
     #[test]
     fn parses_select_count_with_as_of_valid_at() {
         let stmt = parse_sql("SELECT count(*) FROM orders AS OF 22 VALID AT 7;").unwrap();
-        assert_eq!(
-            stmt,
-            Statement::Select {
-                table: "orders".to_string(),
-                projection: SelectProjection::CountStar,
-                join: None,
-                pk_filter: None,
-                as_of: Some(22),
-                valid_at: Some(7),
-                group_by_pk: false,
-                order_by_pk: None,
-                limit: None,
-            }
-        );
+        if let Statement::Select { as_of, valid_at, .. } = stmt {
+            assert_eq!(as_of, Some(22));
+            assert_eq!(valid_at, Some(7));
+        } else {
+            panic!("expected Select");
+        }
     }
 
     #[test]
     fn parses_join_with_qualified_on_predicate() {
         let stmt =
             parse_sql("SELECT pk, doc FROM left_t JOIN right_t ON left_t.pk=right_t.pk;").unwrap();
-        assert_eq!(
-            stmt,
-            Statement::Select {
-                table: "left_t".to_string(),
-                projection: SelectProjection::PkDoc,
-                join: Some(JoinSpec {
-                    right_table: "right_t".to_string(),
-                }),
-                pk_filter: None,
-                as_of: None,
-                valid_at: None,
-                group_by_pk: false,
-                order_by_pk: None,
-                limit: None,
-            }
-        );
+        if let Statement::Select { join, .. } = stmt {
+            assert!(join.is_some());
+            let j = join.unwrap();
+            assert_eq!(j.join_type, JoinType::Inner);
+            assert_eq!(j.right_table, "right_t");
+        } else {
+            panic!("expected Select");
+        }
     }
 
     #[test]
@@ -832,20 +1911,13 @@ mod tests {
         let stmt =
             parse_sql("SELECT pk, count(*) FROM orders GROUP BY pk ORDER BY pk DESC LIMIT 3;")
                 .unwrap();
-        assert_eq!(
-            stmt,
-            Statement::Select {
-                table: "orders".to_string(),
-                projection: SelectProjection::PkCount,
-                join: None,
-                pk_filter: None,
-                as_of: None,
-                valid_at: None,
-                group_by_pk: true,
-                order_by_pk: Some(OrderDirection::Desc),
-                limit: Some(3),
-            }
-        );
+        if let Statement::Select { group_by, order_by, limit, .. } = stmt {
+            assert!(group_by.is_some());
+            assert!(order_by.is_some());
+            assert_eq!(limit, Some(3));
+        } else {
+            panic!("expected Select");
+        }
     }
 
     #[test]
@@ -881,24 +1953,20 @@ mod tests {
     #[test]
     fn keeps_create_table_syntax_working() {
         let stmt = parse_sql("CREATE TABLE users (pk TEXT PRIMARY KEY);").unwrap();
-        assert_eq!(
-            stmt,
-            Statement::CreateTable {
-                table: "users".to_string()
-            }
-        );
+        if let Statement::CreateTable { table, columns } = stmt {
+            assert_eq!(table, "users");
+            assert_eq!(columns.len(), 1);
+            assert_eq!(columns[0].name, "pk");
+            assert!(columns[0].primary_key);
+        } else {
+            panic!("expected CreateTable");
+        }
     }
 
     #[test]
     fn rejects_invalid_create_index_shape() {
         let err = parse_sql("CREATE INDEX idx ON t pk").unwrap_err();
         assert!(format!("{err}").contains("expected symbol ("));
-    }
-
-    #[test]
-    fn rejects_pk_count_without_group_by() {
-        let err = parse_sql("SELECT pk, count(*) FROM orders;").unwrap_err();
-        assert!(format!("{err}").contains("requires GROUP BY pk"));
     }
 
     #[test]
@@ -911,5 +1979,108 @@ mod tests {
         assert_eq!(stmts[0], "BEGIN");
         assert!(stmts[1].starts_with("INSERT INTO t"));
         assert_eq!(stmts[2], "COMMIT");
+    }
+
+    #[test]
+    fn parses_update_with_where() {
+        let stmt = parse_sql("UPDATE t SET doc = '{\"v\":3}' WHERE pk = 'k1';").unwrap();
+        if let Statement::Update { table, filter, .. } = stmt {
+            assert_eq!(table, "t");
+            assert!(filter.is_some());
+        } else {
+            panic!("expected Update");
+        }
+    }
+
+    #[test]
+    fn parses_delete_with_where() {
+        let stmt = parse_sql("DELETE FROM t WHERE pk = 'k1';").unwrap();
+        if let Statement::Delete { table, filter, .. } = stmt {
+            assert_eq!(table, "t");
+            assert!(filter.is_some());
+        } else {
+            panic!("expected Delete");
+        }
+    }
+
+    #[test]
+    fn parses_left_join() {
+        let stmt = parse_sql("SELECT pk, doc FROM a LEFT JOIN b ON a.pk = b.pk;").unwrap();
+        if let Statement::Select { join, .. } = stmt {
+            let j = join.unwrap();
+            assert_eq!(j.join_type, JoinType::Left);
+        } else {
+            panic!("expected Select");
+        }
+    }
+
+    #[test]
+    fn parses_having() {
+        let stmt = parse_sql("SELECT pk, count(*) FROM t GROUP BY pk HAVING count(*) > 1;").unwrap();
+        if let Statement::Select { having, .. } = stmt {
+            assert!(having.is_some());
+        } else {
+            panic!("expected Select");
+        }
+    }
+
+    #[test]
+    fn parses_between() {
+        let stmt = parse_sql("SELECT doc FROM t WHERE doc.balance BETWEEN 10 AND 100;").unwrap();
+        if let Statement::Select { filter, .. } = stmt {
+            assert!(matches!(filter, Some(Expr::Between { .. })));
+        } else {
+            panic!("expected Select");
+        }
+    }
+
+    #[test]
+    fn parses_in_list() {
+        let stmt = parse_sql("SELECT doc FROM t WHERE pk IN ('a', 'b', 'c');").unwrap();
+        if let Statement::Select { filter, .. } = stmt {
+            assert!(matches!(filter, Some(Expr::InList { .. })));
+        } else {
+            panic!("expected Select");
+        }
+    }
+
+    #[test]
+    fn parses_comparison_operators() {
+        parse_sql("SELECT doc FROM t WHERE doc.x != 5;").unwrap();
+        parse_sql("SELECT doc FROM t WHERE doc.x <= 5;").unwrap();
+        parse_sql("SELECT doc FROM t WHERE doc.x >= 5;").unwrap();
+        parse_sql("SELECT doc FROM t WHERE doc.x < 5;").unwrap();
+        parse_sql("SELECT doc FROM t WHERE doc.x > 5;").unwrap();
+    }
+
+    #[test]
+    fn parses_like() {
+        let stmt = parse_sql("SELECT doc FROM t WHERE pk LIKE 'test%';").unwrap();
+        if let Statement::Select { filter, .. } = stmt {
+            assert!(matches!(filter, Some(Expr::BinOp { op: BinOperator::Like, .. })));
+        } else {
+            panic!("expected Select");
+        }
+    }
+
+    #[test]
+    fn parses_cte() {
+        let stmt = parse_sql("WITH cte1 AS (SELECT doc FROM t) SELECT doc FROM cte1;").unwrap();
+        if let Statement::Select { ctes, .. } = stmt {
+            assert_eq!(ctes.len(), 1);
+            assert_eq!(ctes[0].name, "cte1");
+        } else {
+            panic!("expected Select");
+        }
+    }
+
+    #[test]
+    fn parses_subquery_in_from() {
+        let stmt = parse_sql("SELECT doc FROM (SELECT doc FROM t) sub;").unwrap();
+        if let Statement::Select { from: TableRef::Subquery { alias, .. }, .. } = stmt {
+            assert_eq!(alias, "sub");
+        } else {
+            panic!("expected Select with subquery");
+        }
     }
 }

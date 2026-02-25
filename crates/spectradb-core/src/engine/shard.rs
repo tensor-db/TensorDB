@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,8 @@ use crate::error::Result;
 use crate::ledger::internal_key::{decode_internal_key, encode_internal_key, KIND_PUT};
 use crate::ledger::record::{FactMetadata, FactValue, FactWrite};
 use crate::native_bridge::Hasher;
-use crate::storage::compaction::compact_l0;
+use crate::storage::cache::{BlockCache, IndexCache};
+use crate::storage::levels::LevelManager;
 use crate::storage::manifest::{Manifest, ManifestShardState};
 use crate::storage::memtable::Memtable;
 use crate::storage::sstable::{build_sstable, SsTableReader};
@@ -33,7 +34,24 @@ pub struct PrefixScanResultRow {
     pub commit_ts: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct WriteBatchItem {
+    pub user_key: Vec<u8>,
+    pub doc: Vec<u8>,
+    pub valid_from: u64,
+    pub valid_to: u64,
+    pub schema_version: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChangeEvent {
+    pub user_key: Vec<u8>,
+    pub doc: Vec<u8>,
+    pub commit_ts: u64,
+    pub valid_from: u64,
+    pub valid_to: u64,
+}
+
 pub enum ShardCommand {
     Put {
         user_key: Vec<u8>,
@@ -42,6 +60,10 @@ pub enum ShardCommand {
         valid_to: u64,
         schema_version: Option<u64>,
         resp: Sender<Result<u64>>,
+    },
+    WriteBatch {
+        entries: Vec<WriteBatchItem>,
+        resp: Sender<Result<Vec<u64>>>,
     },
     Get {
         user_key: Vec<u8>,
@@ -55,6 +77,10 @@ pub enum ShardCommand {
         valid_at: Option<u64>,
         limit: Option<usize>,
         resp: Sender<Result<Vec<PrefixScanResultRow>>>,
+    },
+    Subscribe {
+        prefix: Vec<u8>,
+        sender: crossbeam_channel::Sender<ChangeEvent>,
     },
     Stats {
         resp: Sender<ShardStats>,
@@ -72,6 +98,11 @@ pub struct ShardStats {
     pub mmap_block_reads: u64,
 }
 
+struct Subscriber {
+    prefix: Vec<u8>,
+    sender: crossbeam_channel::Sender<ChangeEvent>,
+}
+
 pub struct ShardRuntime {
     shard_id: usize,
     shard_dir: PathBuf,
@@ -81,9 +112,12 @@ pub struct ShardRuntime {
     wal: Wal,
     memtable: Memtable,
     immutable_memtables: Vec<Memtable>,
-    sstables: Vec<SsTableReader>,
+    levels: LevelManager,
     commit_counter: u64,
     stats: ShardStats,
+    subscribers: Vec<Subscriber>,
+    _block_cache: Arc<BlockCache>,
+    _index_cache: Arc<IndexCache>,
 }
 
 impl ShardRuntime {
@@ -94,6 +128,8 @@ impl ShardRuntime {
         hasher: Arc<dyn Hasher + Send + Sync>,
         manifest: Arc<Mutex<Manifest>>,
         shard_state: ManifestShardState,
+        block_cache: Arc<BlockCache>,
+        index_cache: Arc<IndexCache>,
     ) -> Result<Self> {
         let shard_dir = root.join(format!("shard-{shard_id}"));
         fs::create_dir_all(&shard_dir)?;
@@ -114,6 +150,15 @@ impl ShardRuntime {
                 sstables.push(SsTableReader::open(&p)?);
             }
         }
+
+        let levels = LevelManager::from_sstables(
+            shard_dir.clone(),
+            sstables,
+            config.compaction_max_levels,
+            config.compaction_l1_target_bytes,
+            config.compaction_size_ratio,
+            config.sstable_max_file_bytes,
+        );
 
         let mut memtable = Memtable::new();
         for write in Wal::replay(&wal_path)? {
@@ -136,9 +181,12 @@ impl ShardRuntime {
             wal,
             memtable,
             immutable_memtables: Vec::new(),
-            sstables,
+            levels,
             commit_counter,
             stats: ShardStats::default(),
+            subscribers: Vec::new(),
+            _block_cache: block_cache,
+            _index_cache: index_cache,
         })
     }
 
@@ -154,6 +202,10 @@ impl ShardRuntime {
                     resp,
                 } => {
                     let res = self.handle_put(&user_key, doc, valid_from, valid_to, schema_version);
+                    let _ = resp.send(res);
+                }
+                ShardCommand::WriteBatch { entries, resp } => {
+                    let res = self.handle_write_batch(entries);
                     let _ = resp.send(res);
                 }
                 ShardCommand::Get {
@@ -174,6 +226,9 @@ impl ShardRuntime {
                 } => {
                     let res = self.handle_scan_prefix(&user_key_prefix, as_of, valid_at, limit);
                     let _ = resp.send(res);
+                }
+                ShardCommand::Subscribe { prefix, sender } => {
+                    self.subscribers.push(Subscriber { prefix, sender });
                 }
                 ShardCommand::Stats { resp } => {
                     let _ = resp.send(self.stats.clone());
@@ -218,6 +273,9 @@ impl ShardRuntime {
         self.memtable.insert(internal_key, fact);
         self.stats.puts += 1;
 
+        // Notify subscribers
+        self.emit_change(user_key, &write.fact, commit_ts, valid_from, valid_to);
+
         if self.memtable.approx_bytes() >= self.config.memtable_max_bytes {
             self.flush_active_memtable()?;
         } else {
@@ -225,6 +283,76 @@ impl ShardRuntime {
         }
 
         Ok(commit_ts)
+    }
+
+    fn emit_change(
+        &mut self,
+        user_key: &[u8],
+        _fact_bytes: &[u8],
+        commit_ts: u64,
+        valid_from: u64,
+        valid_to: u64,
+    ) {
+        if self.subscribers.is_empty() {
+            return;
+        }
+        // Remove dead subscribers and notify matching ones
+        self.subscribers.retain(|sub| {
+            if !user_key.starts_with(&sub.prefix) {
+                return true; // Keep but don't notify
+            }
+            sub.sender
+                .send(ChangeEvent {
+                    user_key: user_key.to_vec(),
+                    doc: Vec::new(), // We don't decode the fact bytes here for perf
+                    commit_ts,
+                    valid_from,
+                    valid_to,
+                })
+                .is_ok() // Drop if receiver is gone
+        });
+    }
+
+    fn handle_write_batch(&mut self, entries: Vec<WriteBatchItem>) -> Result<Vec<u64>> {
+        let mut timestamps = Vec::with_capacity(entries.len());
+        let mut wal_writes = Vec::with_capacity(entries.len());
+
+        for entry in &entries {
+            self.commit_counter = self.commit_counter.saturating_add(1);
+            let commit_ts = self.commit_counter;
+            timestamps.push(commit_ts);
+
+            let internal_key = encode_internal_key(&entry.user_key, commit_ts, KIND_PUT);
+            let fact = FactValue {
+                doc: entry.doc.clone(),
+                valid_from: entry.valid_from,
+                valid_to: entry.valid_to,
+            }
+            .encode();
+
+            wal_writes.push(FactWrite {
+                internal_key: internal_key.clone(),
+                fact: fact.clone(),
+                metadata: FactMetadata {
+                    source_id: None,
+                    schema_version: entry.schema_version,
+                },
+            });
+
+            self.memtable.insert(internal_key, fact);
+        }
+
+        // Single WAL frame for the batch
+        self.wal.append_batch(&wal_writes)?;
+        self.stats.puts += entries.len() as u64;
+
+        if self.memtable.approx_bytes() >= self.config.memtable_max_bytes {
+            self.flush_active_memtable()?;
+        } else {
+            self.persist_manifest_watermark_in_memory();
+        }
+
+        Ok(timestamps)
     }
 
     fn handle_get(
@@ -252,7 +380,7 @@ impl ShardRuntime {
 
         let mut explain_bloom = None;
         let mut explain_block = None;
-        for reader in self.sstables.iter().rev() {
+        for reader in self.levels.all_readers().iter().rev() {
             let lookup = reader.get_visible(user_key, as_of_ts, valid_at, self.hasher.as_ref())?;
             if explain_bloom.is_none() {
                 explain_bloom = Some(lookup.bloom_hit);
@@ -291,7 +419,6 @@ impl ShardRuntime {
             return Ok(Vec::new());
         }
 
-        // Stage 1 metric integration: treat prefix scans as read operations.
         self.stats.gets += 1;
         let as_of_ts = as_of.unwrap_or(self.commit_counter);
 
@@ -311,7 +438,7 @@ impl ShardRuntime {
                 )?;
             }
         }
-        for reader in &self.sstables {
+        for reader in self.levels.all_readers() {
             for (key, value) in reader.iter_all_entries()? {
                 Self::update_prefix_best(
                     &mut best,
@@ -391,13 +518,7 @@ impl ShardRuntime {
             .find(|s| s.shard_id == self.shard_id)
         {
             shard.commit_ts_high_watermark = self.commit_counter;
-            let mut files = Vec::new();
-            for r in &self.sstables {
-                if let Some(name) = r.path.file_name().and_then(|n| n.to_str()) {
-                    files.push(name.to_string());
-                }
-            }
-            shard.l0_files = files;
+            shard.l0_files = self.levels.file_names();
         }
         manifest.save()?;
         Ok(())
@@ -430,55 +551,55 @@ impl ShardRuntime {
             self.config.bloom_bits_per_key,
             self.hasher.as_ref(),
         )?;
-        // Fsync shard directory so the new SSTable's directory entry is durable.
         File::open(&self.shard_dir)?.sync_all()?;
 
-        self.sstables.push(SsTableReader::open(&sst_path)?);
+        self.levels.add_l0_file(SsTableReader::open(&sst_path)?);
         self.stats.flushes += 1;
         self.persist_manifest_state()?;
 
-        // Truncate active WAL after successful flush+manifest persistence.
         self.wal.truncate()?;
 
-        if self.sstables.len() > self.config.compaction_l0_threshold {
-            self.compact_l0()?;
-        }
+        // Check for compaction using leveled strategy
+        self.maybe_compact()?;
 
         Ok(())
     }
 
-    fn compact_l0(&mut self) -> Result<()> {
-        if self.sstables.len() <= 1 {
-            return Ok(());
-        }
-        let old_files: HashSet<PathBuf> = self.sstables.iter().map(|r| r.path.clone()).collect();
-
-        let compact_file_name = {
-            let mut manifest = self.manifest.lock();
-            let id = manifest.state.next_file_id;
-            manifest.state.next_file_id += 1;
-            format!("compact-{id}.sst")
+    fn maybe_compact(&mut self) -> Result<()> {
+        // Use leveled compaction strategy from LevelManager
+        let mut next_file_id = {
+            let manifest = self.manifest.lock();
+            manifest.state.next_file_id
         };
-        let compact_path = self.shard_dir.join(compact_file_name);
 
-        compact_l0(
-            &self.sstables,
-            &compact_path,
-            self.config.sstable_block_bytes,
-            self.config.bloom_bits_per_key,
-            self.hasher.as_ref(),
-        )?;
-        // Fsync shard directory so the compacted SSTable's directory entry is durable.
-        File::open(&self.shard_dir)?.sync_all()?;
+        while let Some(task) = self
+            .levels
+            .needs_compaction(self.config.compaction_l0_threshold)
+        {
+            let result = self.levels.execute_compaction(
+                &task,
+                self.config.sstable_block_bytes,
+                self.config.bloom_bits_per_key,
+                self.hasher.as_ref(),
+                &mut next_file_id,
+            )?;
 
-        let new_reader = SsTableReader::open(&compact_path)?;
-        self.sstables = vec![new_reader];
-
-        for old in old_files {
-            let _ = fs::remove_file(old);
+            self.stats.compactions += 1;
+            tracing::info!(
+                "shard {}: compacted L{}→L{}: removed {} files, created {}",
+                self.shard_id,
+                task.source_level,
+                task.target_level,
+                result.files_removed,
+                result.files_created,
+            );
         }
 
-        self.stats.compactions += 1;
+        // Update manifest with new file id
+        {
+            let mut manifest = self.manifest.lock();
+            manifest.state.next_file_id = next_file_id;
+        }
         self.persist_manifest_state()?;
         Ok(())
     }
