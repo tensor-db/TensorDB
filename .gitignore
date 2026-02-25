@@ -1,0 +1,29 @@
+# Rust build artifacts
+/target/
+
+# Local runtime / benchmark artifacts
+/data/
+/bench_runs/
+/overnight_runs/
+/output/
+
+# CLI shell history
+**/.spectradb_history
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Environment files
+.env
+.env.*
+
+# Tool config
+.claude/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

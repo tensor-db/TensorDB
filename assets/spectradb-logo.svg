@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="720" viewBox="0 0 1920 720" fill="none">
+  <defs>
+    <linearGradient id="markBg" x1="70" y1="32" x2="614" y2="662" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#07111A"/>
+      <stop offset="1" stop-color="#0C2130"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="150" y1="140" x2="534" y2="584" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00E3C2"/>
+      <stop offset="1" stop-color="#4FB7FF"/>
+    </linearGradient>
+    <linearGradient id="facetA" x1="243" y1="112" x2="397" y2="525" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#B7FFF1"/>
+      <stop offset="1" stop-color="#26D7B8"/>
+    </linearGradient>
+    <linearGradient id="facetB" x1="167" y1="181" x2="457" y2="575" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#69D0FF"/>
+      <stop offset="1" stop-color="#2B84FF"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1920" height="720" fill="#060D14"/>
+
+  <rect x="72" y="72" width="544" height="544" rx="126" fill="url(#markBg)"/>
+
+  <g filter="url(#glow)" opacity="0.95">
+    <ellipse cx="344" cy="344" rx="194" ry="142" transform="rotate(-16 344 344)" stroke="url(#ring)" stroke-width="15"/>
+    <ellipse cx="344" cy="344" rx="142" ry="99" transform="rotate(18 344 344)" stroke="#7AE8FF" stroke-opacity="0.72" stroke-width="9" stroke-dasharray="9 12"/>
+  </g>
+
+  <path d="M344 165L468 236V380L344 451L220 380V236L344 165Z" stroke="#86F5E7" stroke-opacity="0.85" stroke-width="7"/>
+  <path d="M344 165L468 236L344 308L220 236L344 165Z" fill="url(#facetA)"/>
+  <path d="M344 308V451L220 380V236L344 308Z" fill="url(#facetB)" fill-opacity="0.95"/>
+  <path d="M344 308V451L468 380V236L344 308Z" fill="#0FA5D2" fill-opacity="0.38"/>
+  <path d="M276 365L344 405L412 365" stroke="#D7FFF8" stroke-opacity="0.95" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="344" cy="344" r="10" fill="#E8FFFB"/>
+
+  <g fill="#EAF7FF">
+    <text x="682" y="322" font-size="124" font-family="Avenir Next, Segoe UI, Helvetica, Arial, sans-serif" font-weight="700" letter-spacing="2">SpectraDB</text>
+    <text x="687" y="406" font-size="42" font-family="Avenir Next, Segoe UI, Helvetica, Arial, sans-serif" font-weight="500" fill="#8BC0DB" letter-spacing="4">BITEMPORAL LEDGER + FACETS</text>
+  </g>
+
+  <path d="M686 452H1540" stroke="#1E3A4D" stroke-width="2"/>
+  <path d="M686 488H1506" stroke="#123040" stroke-width="2"/>
+</svg>

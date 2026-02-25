@@ -1,0 +1,38 @@
+[package]
+name = "spectradb"
+version = "0.1.0"
+edition = "2021"
+description = "Single-node, append-only, bitemporal ledger database with MVCC snapshot reads and SQL facet"
+license = "MIT"
+repository = "https://github.com/spectra-db/spectraDB"
+keywords = ["database", "bitemporal", "mvcc", "embedded", "ledger"]
+categories = ["database-implementations"]
+
+[workspace]
+members = [
+  ".",
+  "crates/spectradb-core",
+  "crates/spectradb-native",
+  "crates/spectradb-cli",
+]
+default-members = [
+  ".",
+  "crates/spectradb-core",
+  "crates/spectradb-cli",
+]
+resolver = "2"
+
+[features]
+default = []
+native = ["spectradb-core/native"]
+
+[dependencies]
+spectradb-core = { path = "crates/spectradb-core" }
+
+[dev-dependencies]
+criterion = "0.5"
+tempfile = "3"
+
+[[bench]]
+name = "basic"
+harness = false
