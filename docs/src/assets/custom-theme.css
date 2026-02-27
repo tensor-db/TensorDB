@@ -50,7 +50,7 @@
    Light theme
    --------------------------------------------------------------------------- */
 :root[data-theme='light'] {
-  --spectra-dark: #ffffff;
+  --spectra-dark: #f1f5f9;
   --spectra-surface: #f8fafc;
   --spectra-card-bg: rgba(15, 23, 42, 0.03);
   --spectra-card-border: rgba(15, 23, 42, 0.1);
@@ -61,24 +61,33 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Hide Starlight's default hero on splash pages (we render our own)
+   Splash page overrides (homepage only)
+   On splash pages, .main-pane is the only child of its flex container
+   (doc pages also have an <aside> sibling). This scopes rules to splash only.
    --------------------------------------------------------------------------- */
-[data-page-title] {
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  height: 1px;
-  overflow: hidden;
-  position: absolute;
-  white-space: nowrap;
-  width: 1px;
+
+/* Hide Starlight's auto-generated page title h1 on the homepage */
+.main-pane:only-child > main > .content-panel:first-child {
+  display: none;
 }
 
+/* Hide Starlight's default hero component (we render our own) */
 .hero {
   display: none !important;
 }
 
+/* Hide the empty ghost footer on splash pages (no pagination) */
+.main-pane:only-child footer {
+  display: none;
+}
+
+/* Hide markdown <hr> on splash pages only */
+.main-pane:only-child .sl-markdown-content hr {
+  display: none;
+}
+
 /* ---------------------------------------------------------------------------
-   Homepage sections — consistent spacing, no ugly <hr>
+   Homepage sections — consistent spacing
    --------------------------------------------------------------------------- */
 .home-section {
   padding: 3rem 0;
@@ -86,11 +95,6 @@
 
 .home-section + .home-section {
   border-top: 1px solid var(--spectra-card-border);
-}
-
-/* Hide markdown <hr> on splash pages */
-.sl-markdown-content hr {
-  display: none;
 }
 
 /* Feature grid */
