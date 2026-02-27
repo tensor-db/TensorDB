@@ -88,48 +88,48 @@ cargo bench --bench basic          # Microbenchmarks
 - **Optional io_uring** — `--features io-uring` for Linux async I/O.
 - **Optional SIMD** — `--features simd` for hardware-accelerated bloom probes and checksums.
 
-## Who Is This For?
+## Use Cases
 
 <table>
 <tr>
 <td width="50%" valign="top">
 
-### Audit & Compliance Systems
-Regulations demand provable data history. SpectraDB's append-only ledger with bitemporal queries lets you reconstruct the exact state of any record at any point in time — no application-level versioning required.
+### Embedded Application Database
+Drop-in embedded database for any app that needs real SQL — no server process, no Docker, no network. Use it from Rust, Python, or Node.js. Like SQLite, but with 4x faster reads and built-in version history.
 
 </td>
 <td width="50%" valign="top">
 
-### Event-Sourced Applications
-Use SpectraDB as the append-only event store behind CQRS or event-driven architectures. Write batches provide atomic multi-event commits. Change feeds push events to downstream consumers in real time.
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### Temporal Data Management
-Model entities with business-valid time ranges — contracts, policies, price schedules — and query them with full SQL. Ask "what was true on date X?" without building custom versioning logic.
-
-</td>
-<td width="50%" valign="top">
-
-### Embedded & Local-First Apps
-Ship a full temporal database as a Rust library, Python package, or Node.js module — no server process, no network, no Docker. Ideal for IoT gateways, on-device analytics, and desktop apps.
+### Apps That Need an Undo Button
+Every write is preserved. Roll back to any previous state with a single query. Build version history, audit trails, or time-travel debugging into your app without extra bookkeeping.
 
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
-### Real-Time Monitoring & IoT
-The time-series engine handles high-frequency metric ingestion with bucketed storage and downsampling. Combine with change feeds to trigger alerts as data arrives.
+### AI-Powered Applications
+Store vectors alongside your regular data. Run semantic search, full-text search, and SQL queries in one database. No need to sync between a vector store, a search engine, and a relational DB.
 
 </td>
 <td width="50%" valign="top">
 
-### AI & Search Applications
-Vector search with HNSW indexing, full-text search with BM25 ranking, and an in-process AI runtime for insight synthesis — all in a single embedded engine.
+### High-Throughput Ingestion
+Sub-microsecond writes handle sensors, logs, metrics, and event streams at scale. The time-series engine adds bucketed aggregation, gap filling, and rate calculations out of the box.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### Local-First & Edge Computing
+Ship a full-featured database as a library — no infrastructure to manage. Works on desktops, IoT gateways, edge nodes, and anywhere you need data processing without a network round-trip.
+
+</td>
+<td width="50%" valign="top">
+
+### Financial & Regulated Systems
+Immutable append-only storage with bitemporal queries satisfies audit and compliance requirements. Reconstruct the exact state of any record at any point in time — system time and business time tracked separately.
 
 </td>
 </tr>
