@@ -53,7 +53,7 @@ cargo bench --bench multi_engine
 | `spectradb-python` | Python bindings via PyO3/maturin |
 | `spectradb-node` | Node.js bindings via napi-rs |
 
-Default workspace members: root, core, cli, server, native, python, node. Python and Node crates require their respective build tools (maturin, npm).
+Default workspace members: root, core, cli, server. Python and Node crates are excluded from default builds and require their respective build tools (maturin, npm).
 
 ## Contribution Guidelines
 

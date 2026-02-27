@@ -16,7 +16,7 @@
 
 SpectraDB is an embedded database written in Rust that treats every write as an immutable fact. It separates **system time** (when data was recorded) from **business-valid time** (when data was true), giving you built-in time travel and auditability with zero application-level bookkeeping.
 
-**65,000+ lines of Rust** | **224+ integration tests** | **30 test suites** | **8 workspace crates**
+**67,000+ lines of Rust** | **224+ integration tests** | **30 test suites** | **7 workspace crates**
 
 ## Performance
 
@@ -607,7 +607,7 @@ See the full roadmap with per-version feature tracking in the [design.md](design
 ```
 spectradb/
 ├── crates/
-│   ├── spectradb-core/          # Database engine (main crate, ~15k lines)
+│   ├── spectradb-core/          # Database engine (main crate, ~31k lines)
 │   │   └── src/
 │   │       ├── ai/              # AI runtime, inference, ML pipeline, advisors
 │   │       ├── engine/          # Database, shard, fast write path, change feeds

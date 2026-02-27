@@ -2,6 +2,11 @@
 name = "spectradb-core"
 version = "0.1.0"
 edition = "2021"
+description = "Core engine for SpectraDB — an AI-native, bitemporal ledger database with MVCC, full SQL, and LSM storage"
+license = "MIT"
+repository = "https://github.com/spectra-db/SpectraDB"
+keywords = ["database", "embedded", "bitemporal", "sql", "lsm"]
+categories = ["database-implementations"]
 
 [features]
 default = []
