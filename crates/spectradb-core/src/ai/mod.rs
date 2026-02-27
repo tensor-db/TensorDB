@@ -1,6 +1,8 @@
 pub mod access_stats;
 pub mod cache_advisor;
 pub mod compaction_advisor;
+pub mod inference;
+pub mod ml_pipeline;
 pub mod query_advisor;
 
 use std::sync::Arc;

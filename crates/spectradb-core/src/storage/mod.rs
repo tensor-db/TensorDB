@@ -4,6 +4,7 @@ pub mod cache;
 pub mod columnar;
 pub mod compaction;
 pub mod fractal_index;
+pub mod group_wal;
 pub mod levels;
 pub mod manifest;
 pub mod memtable;

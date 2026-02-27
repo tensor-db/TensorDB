@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -58,6 +58,7 @@ pub struct ChangeEvent {
 
 /// Shard commands — writes and control flow go through the channel.
 /// Reads bypass the channel entirely via ShardReadHandle.
+/// Fast writes bypass the channel entirely via FastWritePath.
 pub enum ShardCommand {
     Put {
         user_key: Vec<u8>,
@@ -71,6 +72,8 @@ pub enum ShardCommand {
         entries: Vec<WriteBatchItem>,
         resp: Sender<Result<Vec<u64>>>,
     },
+    /// Request from the fast write path to flush the active memtable.
+    FlushRequest,
     Subscribe {
         prefix: Vec<u8>,
         sender: crossbeam_channel::Sender<ChangeEvent>,
@@ -103,20 +106,25 @@ struct Subscriber {
 /// Shared read state accessible by both the shard writer thread and concurrent readers.
 /// The writer takes brief write locks for memtable inserts, flush, and compaction.
 /// Readers take read locks for get() and scan_prefix() — no channel round-trip.
+/// FastWritePath directly accesses active_memtable and commit_counter.
 pub struct ShardShared {
-    active_memtable: RwLock<Memtable>,
-    immutable_memtables: RwLock<Vec<Memtable>>,
-    levels: RwLock<LevelManager>,
-    commit_counter: AtomicU64,
-    hasher: Arc<dyn Hasher + Send + Sync>,
-    block_cache: Arc<BlockCache>,
-    index_cache: Arc<IndexCache>,
+    pub(crate) active_memtable: RwLock<Memtable>,
+    pub(crate) immutable_memtables: RwLock<Vec<Memtable>>,
+    pub(crate) levels: RwLock<LevelManager>,
+    pub(crate) commit_counter: AtomicU64,
+    pub(crate) hasher: Arc<dyn Hasher + Send + Sync>,
+    pub(crate) block_cache: Arc<BlockCache>,
+    pub(crate) index_cache: Arc<IndexCache>,
     // Atomic read stats
-    stats_gets: AtomicU64,
-    stats_bloom_negatives: AtomicU64,
-    stats_mmap_block_reads: AtomicU64,
+    pub(crate) stats_gets: AtomicU64,
+    pub(crate) stats_bloom_negatives: AtomicU64,
+    pub(crate) stats_mmap_block_reads: AtomicU64,
     // AI config
-    ai_annotate_reads: bool,
+    pub(crate) ai_annotate_reads: bool,
+    /// True when the shard has active change-feed subscribers.
+    /// The fast write path checks this and falls back to the channel path
+    /// so that change events are properly emitted.
+    pub(crate) has_subscribers: AtomicBool,
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +299,12 @@ impl ShardReadHandle {
         self.shared.commit_counter.load(Ordering::Acquire)
     }
 
+    /// Set the has_subscribers flag on the shared state.
+    /// Used by Database::subscribe() to eagerly disable the fast write path.
+    pub fn set_has_subscribers(&self, value: bool) {
+        self.shared.has_subscribers.store(value, Ordering::Release);
+    }
+
     pub fn reader_stats(&self) -> ShardStats {
         ShardStats {
             gets: self.shared.stats_gets.load(Ordering::Relaxed),
@@ -330,6 +344,16 @@ pub struct ShardRuntime {
 }
 
 impl ShardRuntime {
+    /// Get the Arc<ShardShared> for direct access by the fast write path.
+    pub fn shared(&self) -> Arc<ShardShared> {
+        self.shared.clone()
+    }
+
+    /// Get the WAL file path for the group commit durability thread.
+    pub fn wal_path(&self) -> PathBuf {
+        self.wal.path().to_path_buf()
+    }
+
     pub fn open(params: ShardOpenParams) -> Result<(Self, ShardReadHandle)> {
         let ShardOpenParams {
             shard_id,
@@ -406,6 +430,7 @@ impl ShardRuntime {
             stats_bloom_negatives: AtomicU64::new(0),
             stats_mmap_block_reads: AtomicU64::new(0),
             ai_annotate_reads,
+            has_subscribers: AtomicBool::new(false),
         });
 
         let read_handle = ShardReadHandle {
@@ -445,8 +470,23 @@ impl ShardRuntime {
                     let res = self.handle_write_batch(entries);
                     let _ = resp.send(res);
                 }
+                ShardCommand::FlushRequest => {
+                    // Sync local_commit_counter from the atomic (fast path may have advanced it)
+                    let current = self.shared.commit_counter.load(Ordering::Acquire);
+                    if current > self.local_commit_counter {
+                        self.local_commit_counter = current;
+                    }
+                    let should_flush = {
+                        let memtable = self.shared.active_memtable.read();
+                        memtable.approx_bytes() >= self.config.memtable_max_bytes
+                    };
+                    if should_flush {
+                        let _ = self.flush_active_memtable();
+                    }
+                }
                 ShardCommand::Subscribe { prefix, sender } => {
                     self.subscribers.push(Subscriber { prefix, sender });
+                    self.shared.has_subscribers.store(true, Ordering::Release);
                 }
                 ShardCommand::Stats { resp } => {
                     let _ = resp.send(self.stats.clone());
@@ -468,6 +508,11 @@ impl ShardRuntime {
         valid_to: u64,
         schema_version: Option<u64>,
     ) -> Result<u64> {
+        // Sync from atomic — the fast write path may have advanced commit_counter
+        let atomic_ts = self.shared.commit_counter.load(Ordering::Acquire);
+        if atomic_ts > self.local_commit_counter {
+            self.local_commit_counter = atomic_ts;
+        }
         self.local_commit_counter = self.local_commit_counter.saturating_add(1);
         let commit_ts = self.local_commit_counter;
 
@@ -552,6 +597,12 @@ impl ShardRuntime {
     }
 
     fn handle_write_batch(&mut self, entries: Vec<WriteBatchItem>) -> Result<Vec<u64>> {
+        // Sync from atomic — the fast write path may have advanced commit_counter
+        let atomic_ts = self.shared.commit_counter.load(Ordering::Acquire);
+        if atomic_ts > self.local_commit_counter {
+            self.local_commit_counter = atomic_ts;
+        }
+
         let mut timestamps = Vec::with_capacity(entries.len());
         let mut wal_writes = Vec::with_capacity(entries.len());
         let mut memtable_entries = Vec::with_capacity(entries.len());

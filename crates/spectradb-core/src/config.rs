@@ -24,6 +24,9 @@ pub struct Config {
     pub ai_compaction_advisor: bool,
     pub ai_cache_advisor: bool,
     pub ai_access_stats_size: usize,
+    // Fast write path
+    pub fast_write_enabled: bool,
+    pub fast_write_wal_batch_interval_us: u64,
 }
 
 impl Default for Config {
@@ -49,6 +52,8 @@ impl Default for Config {
             ai_compaction_advisor: false,
             ai_cache_advisor: false,
             ai_access_stats_size: 1024,
+            fast_write_enabled: true,
+            fast_write_wal_batch_interval_us: 1000,
         }
     }
 }

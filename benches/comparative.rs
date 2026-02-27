@@ -6,12 +6,33 @@ fn bench_spectradb_point_write(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let config = Config {
         shard_count: 4,
+        fast_write_enabled: true,
         ..Config::default()
     };
     let db = Database::open(dir.path(), config).unwrap();
 
     let mut i = 0u64;
     c.bench_function("spectradb_point_write", |b| {
+        b.iter(|| {
+            let key = format!("bench/{i:08}");
+            let doc = format!("{{\"n\":{i}}}");
+            let _ = db.put(key.as_bytes(), doc.into_bytes(), 0, u64::MAX, Some(1));
+            i += 1;
+        })
+    });
+}
+
+fn bench_spectradb_point_write_channel(c: &mut Criterion) {
+    let dir = TempDir::new().unwrap();
+    let config = Config {
+        shard_count: 4,
+        fast_write_enabled: false,
+        ..Config::default()
+    };
+    let db = Database::open(dir.path(), config).unwrap();
+
+    let mut i = 0u64;
+    c.bench_function("spectradb_point_write_channel", |b| {
         b.iter(|| {
             let key = format!("bench/{i:08}");
             let doc = format!("{{\"n\":{i}}}");
@@ -259,6 +280,7 @@ fn bench_sqlite_mixed_workload(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_spectradb_point_write,
+    bench_spectradb_point_write_channel,
     bench_sqlite_point_write,
     bench_spectradb_point_read,
     bench_sqlite_point_read,

@@ -11,6 +11,7 @@ use crate::ai::{
     parse_insight_id, AiCorrelationRef, AiInsight, AiRuntimeHandle, AiRuntimeStats,
 };
 use crate::config::Config;
+use crate::engine::fast_write::{FastShardState, FastWritePath};
 use crate::engine::shard::{
     ChangeEvent, ShardCommand, ShardOpenParams, ShardReadHandle, ShardRuntime, ShardStats,
     WriteBatchItem,
@@ -19,6 +20,7 @@ use crate::error::{Result, SpectraError};
 use crate::native_bridge::{build_hasher, Hasher};
 use crate::sql::exec::{execute_sql, PreparedStatement, SqlResult};
 use crate::storage::cache::{BlockCache, IndexCache};
+use crate::storage::group_wal::{DurabilityThread, WalBatchQueue};
 use crate::storage::manifest::Manifest;
 
 #[derive(Debug, Clone)]
@@ -89,6 +91,8 @@ pub struct Database {
     shard_senders: Vec<Sender<ShardCommand>>,
     shard_read_handles: Vec<ShardReadHandle>,
     shard_handles: Vec<JoinHandle<()>>,
+    fast_write: Option<Arc<FastWritePath>>,
+    durability_thread: Option<DurabilityThread>,
 }
 
 impl Database {
@@ -115,6 +119,10 @@ impl Database {
         let mut shard_senders = Vec::with_capacity(config.shard_count);
         let mut shard_read_handles = Vec::with_capacity(config.shard_count);
         let mut shard_handles = Vec::with_capacity(config.shard_count);
+        let mut shard_runtimes_for_fast: Vec<(
+            std::sync::Arc<crate::engine::shard::ShardShared>,
+            PathBuf,
+        )> = Vec::new();
 
         for shard_id in 0..config.shard_count {
             let (tx, rx) = unbounded();
@@ -136,6 +144,11 @@ impl Database {
 
             let (runtime, read_handle) = ShardRuntime::open(params)?;
 
+            // Capture shared state and WAL path before moving runtime into thread
+            if config.fast_write_enabled {
+                shard_runtimes_for_fast.push((runtime.shared(), runtime.wal_path()));
+            }
+
             let handle = thread::Builder::new()
                 .name(format!("spectradb-shard-{shard_id}"))
                 .spawn(move || runtime.run(rx))?;
@@ -146,6 +159,14 @@ impl Database {
         }
 
         let ai_runtime = if config.ai_auto_insights {
+            // Eagerly set has_subscribers so the fast write path falls back
+            // to the channel path before the shard actors process Subscribe.
+            for (shared, _) in &shard_runtimes_for_fast {
+                shared
+                    .has_subscribers
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+
             let events = {
                 let (tx, rx) = unbounded();
                 for shard_tx in &shard_senders {
@@ -166,6 +187,43 @@ impl Database {
             None
         };
 
+        // Initialize fast write path
+        let (fast_write, durability_thread) = if config.fast_write_enabled {
+            let wal_queue = Arc::new(WalBatchQueue::new(config.shard_count));
+            let wal_paths: Vec<PathBuf> = shard_runtimes_for_fast
+                .iter()
+                .map(|(_, p)| p.clone())
+                .collect();
+
+            let shard_states: Vec<FastShardState> = shard_runtimes_for_fast
+                .into_iter()
+                .zip(shard_senders.iter())
+                .zip(std::iter::repeat(config.clone()))
+                .map(|(((shared, _wal_path), sender), cfg)| FastShardState {
+                    shared,
+                    shard_sender: sender.clone(),
+                    config: cfg,
+                })
+                .collect();
+
+            let fast = Arc::new(FastWritePath::new(
+                shard_states,
+                wal_queue.clone(),
+                hasher.clone(),
+                config.fast_write_wal_batch_interval_us,
+            ));
+
+            let durability = DurabilityThread::spawn(
+                wal_queue,
+                wal_paths,
+                config.fast_write_wal_batch_interval_us,
+            );
+
+            (Some(fast), Some(durability))
+        } else {
+            (None, None)
+        };
+
         Ok(Self {
             root,
             config,
@@ -175,6 +233,8 @@ impl Database {
             shard_senders,
             shard_read_handles,
             shard_handles,
+            fast_write,
+            durability_thread,
         })
     }
 
@@ -186,6 +246,15 @@ impl Database {
         valid_to: u64,
         schema_version: Option<u64>,
     ) -> Result<u64> {
+        // Fast path: direct write, no channel
+        if let Some(ref fast) = self.fast_write {
+            if let Some(result) =
+                fast.try_fast_put(user_key, &doc, valid_from, valid_to, schema_version)
+            {
+                return result;
+            }
+        }
+        // Slow path: existing channel dispatch (unchanged, for backpressure fallback)
         let shard_id = self.shard_for(user_key);
         let (tx, rx) = bounded(1);
         self.shard_senders[shard_id]
@@ -312,6 +381,12 @@ impl Database {
     /// Subscribe to change events for keys matching a prefix.
     /// Returns a receiver that will receive ChangeEvent for each write.
     pub fn subscribe(&self, prefix: &[u8]) -> crossbeam_channel::Receiver<ChangeEvent> {
+        // Eagerly mark all shards as having subscribers so the fast write path
+        // falls back to the channel path (which emits change events).
+        for rh in &self.shard_read_handles {
+            rh.set_has_subscribers(true);
+        }
+
         let (tx, rx) = unbounded();
         // Fan out to all shards
         for shard_tx in &self.shard_senders {
@@ -506,6 +581,14 @@ impl Database {
         &self.config
     }
 
+    /// Ensure all pending fast-path WAL records have been flushed to disk.
+    /// Call this when you need durability guarantees after fast-path writes.
+    pub fn sync(&self) {
+        if let Some(ref dt) = self.durability_thread {
+            dt.sync();
+        }
+    }
+
     pub(crate) fn shard_for(&self, key: &[u8]) -> usize {
         (self.hasher.hash64(key) as usize) % self.config.shard_count
     }
@@ -513,6 +596,14 @@ impl Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
+        // Disable fast write path first so no new writes go through it
+        if let Some(ref fast) = self.fast_write {
+            fast.disable();
+        }
+        // Flush pending WAL records
+        if let Some(ref mut dt) = self.durability_thread {
+            dt.shutdown();
+        }
         if let Some(ai) = &mut self.ai_runtime {
             ai.shutdown();
         }
