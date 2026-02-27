@@ -1,0 +1,88 @@
+---
+draft: false
+head: []
+title: Window Functions
+description: Window/analytic functions for ranking, ordering, and running calculations in SpectraDB.
+---
+
+Window functions compute values across a set of rows related to the current row, without collapsing the result set.
+
+## ROW_NUMBER
+
+Assigns sequential numbers to rows within a partition:
+
+```sql
+SELECT
+    name,
+    category,
+    price,
+    ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC) as rank
+FROM products;
+```
+
+## RANK / DENSE_RANK
+
+```sql
+SELECT
+    name,
+    price,
+    RANK() OVER (ORDER BY price DESC) as rank,
+    DENSE_RANK() OVER (ORDER BY price DESC) as dense_rank
+FROM products;
+```
+
+- `RANK`: Gaps after ties (1, 2, 2, 4)
+- `DENSE_RANK`: No gaps (1, 2, 2, 3)
+
+## LAG / LEAD
+
+Access previous/next rows:
+
+```sql
+SELECT
+    date,
+    price,
+    LAG(price, 1) OVER (ORDER BY date) as prev_price,
+    LEAD(price, 1) OVER (ORDER BY date) as next_price,
+    price - LAG(price, 1) OVER (ORDER BY date) as price_change
+FROM stock_prices;
+```
+
+## Running Aggregates
+
+```sql
+SELECT
+    date,
+    amount,
+    SUM(amount) OVER (ORDER BY date) as running_total,
+    AVG(amount) OVER (ORDER BY date) as running_avg,
+    COUNT(*) OVER (ORDER BY date) as running_count
+FROM transactions;
+```
+
+## Frame Specification
+
+```sql
+-- Moving average over last 3 rows
+SELECT
+    date,
+    value,
+    AVG(value) OVER (
+        ORDER BY date
+        ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+    ) as moving_avg_3
+FROM metrics;
+```
+
+## Partitioned Windows
+
+```sql
+-- Rank products within each category
+SELECT
+    category,
+    name,
+    price,
+    ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC) as category_rank,
+    price / SUM(price) OVER (PARTITION BY category) as pct_of_category
+FROM products;
+```

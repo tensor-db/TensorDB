@@ -1,0 +1,101 @@
+---
+draft: false
+head: []
+title: String Functions
+description: Text manipulation functions in SpectraDB SQL.
+---
+
+## UPPER / LOWER
+
+```sql
+SELECT UPPER('hello');    -- 'HELLO'
+SELECT LOWER('HELLO');    -- 'hello'
+```
+
+## LENGTH / CHAR_LENGTH
+
+```sql
+SELECT LENGTH('hello');        -- 5
+SELECT CHAR_LENGTH('hello');   -- 5
+```
+
+## TRIM / LTRIM / RTRIM
+
+```sql
+SELECT TRIM('  hello  ');     -- 'hello'
+SELECT LTRIM('  hello');       -- 'hello'
+SELECT RTRIM('hello  ');       -- 'hello'
+```
+
+## SUBSTR / SUBSTRING
+
+```sql
+SELECT SUBSTR('hello world', 1, 5);  -- 'hello'
+SELECT SUBSTR('hello', 3);            -- 'llo'
+```
+
+## CONCAT / ||
+
+```sql
+SELECT CONCAT('hello', ' ', 'world');  -- 'hello world'
+SELECT 'hello' || ' ' || 'world';      -- 'hello world'
+```
+
+## REPLACE
+
+```sql
+SELECT REPLACE('hello world', 'world', 'SpectraDB');  -- 'hello SpectraDB'
+```
+
+## INSTR
+
+```sql
+SELECT INSTR('hello world', 'world');  -- 7
+```
+
+## REVERSE
+
+```sql
+SELECT REVERSE('hello');  -- 'olleh'
+```
+
+## REPEAT
+
+```sql
+SELECT REPEAT('ab', 3);  -- 'ababab'
+```
+
+## LEFT / RIGHT
+
+```sql
+SELECT LEFT('hello', 3);   -- 'hel'
+SELECT RIGHT('hello', 3);  -- 'llo'
+```
+
+## LPAD / RPAD
+
+```sql
+SELECT LPAD('42', 5, '0');   -- '00042'
+SELECT RPAD('hi', 5, '.');   -- 'hi...'
+```
+
+## COALESCE
+
+```sql
+SELECT COALESCE(NULL, NULL, 'default');  -- 'default'
+```
+
+## NULLIF
+
+```sql
+SELECT NULLIF('a', 'a');  -- NULL
+SELECT NULLIF('a', 'b');  -- 'a'
+```
+
+## TYPEOF
+
+```sql
+SELECT TYPEOF(42);       -- 'integer'
+SELECT TYPEOF('hello');  -- 'text'
+SELECT TYPEOF(3.14);     -- 'real'
+```

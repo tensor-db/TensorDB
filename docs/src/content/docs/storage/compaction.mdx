@@ -1,0 +1,52 @@
+---
+draft: false
+head: []
+title: Compaction
+description: Multi-level compaction in SpectraDB's LSM storage engine.
+---
+
+Compaction merges SSTables across levels to reduce read amplification and reclaim space from duplicate keys.
+
+## LSM Levels
+
+```
+L0: 8 SSTables max (unsorted, may overlap)
+L1: 10MB target (sorted, non-overlapping)
+L2: 100MB target (L1 × size_ratio)
+L3: 1GB target
+L4: 10GB target
+L5: 100GB target
+L6: 1TB target
+```
+
+## Compaction Strategy
+
+### L0 → L1
+
+Triggered when L0 has `compaction_l0_threshold` (default: 8) SSTables:
+- All L0 files are merged with overlapping L1 files
+- Result is a set of sorted, non-overlapping L1 SSTables
+
+### L1+ → L(n+1)
+
+Triggered when a level exceeds its size target:
+- Select SSTables from Ln that overlap with Ln+1
+- Merge and write new SSTables at Ln+1
+- Remove input SSTables from manifest
+
+## Version Preservation
+
+**SpectraDB never drops temporal versions during compaction.** All versions of every key are preserved. This is critical for:
+
+- Time-travel queries (AS OF)
+- Bitemporal queries (VALID AT)
+- Audit trail completeness
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `compaction_l0_threshold` | 8 | L0 files before triggering compaction |
+| `compaction_l1_target_bytes` | 10MB | L1 size target |
+| `compaction_size_ratio` | 10 | Size multiplier between levels |
+| `compaction_max_levels` | 7 | Maximum number of levels (L0–L6) |

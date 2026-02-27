@@ -1,0 +1,52 @@
+---
+draft: false
+head: []
+title: Time Series
+description: Bucketed time-series metrics and aggregation in SpectraDB.
+---
+
+SpectraDB's time series facet provides efficient storage and querying of timestamped metric data.
+
+## Storing Metrics
+
+```rust
+use spectradb::Value;
+
+// Store a metric data point
+db.put_temporal(
+    "metrics/cpu/host-1",
+    Value::Real(72.5),
+    1718409600,  // valid_from: timestamp
+    1718409660,  // valid_to: +60s (1-minute bucket)
+)?;
+```
+
+## Bucketed Aggregation
+
+Query metrics with time buckets:
+
+```sql
+-- Average CPU per 5-minute bucket
+SELECT
+    (valid_from / 300) * 300 as bucket,
+    AVG(CAST(value AS REAL)) as avg_cpu
+FROM __keys__
+WHERE key LIKE 'metrics/cpu/%'
+GROUP BY bucket
+ORDER BY bucket;
+```
+
+## Use Cases
+
+- **Infrastructure monitoring**: CPU, memory, disk usage over time
+- **Application metrics**: Request latency, error rates, throughput
+- **IoT data**: Sensor readings with temporal bucketing
+- **Financial data**: Price history with business-time semantics
+
+## Bitemporal Advantage
+
+Unlike traditional time-series databases, SpectraDB's bitemporal model lets you:
+
+- **Backfill data**: Write historical metrics without disrupting the timeline
+- **Correct errors**: Write a correction for past data while preserving the original
+- **Audit changes**: See what metrics were known at any point in system time

@@ -1,0 +1,107 @@
+---
+draft: false
+head: []
+title: SpectraDB
+description: The AI-native bitemporal ledger database. 276ns reads. 1.9µs writes. Built in Rust.
+template: splash
+hero:
+  title: The AI-Native Bitemporal Ledger Database
+  tagline: "Append-only immutable storage with MVCC snapshot reads, SQL query surface, LSM-tree engine, and embedded AI runtime. 276ns reads · 1.9µs writes · 20× faster than SQLite."
+  actions:
+    - text: Get Started
+      link: /getting-started/quickstart/
+      icon: right-arrow
+    - text: SQL Reference
+      link: /sql/
+      variant: minimal
+    - text: Benchmarks
+      link: /performance/benchmarks/
+      variant: minimal
+---
+
+import FeatureCard from '../../components/FeatureCard.astro';
+import PerformanceChart from '../../components/PerformanceChart.astro';
+import SqlPlayground from '../../components/SqlPlayground.astro';
+
+## Why SpectraDB?
+
+Every write is an **immutable fact**. Every fact has a **timeline**. No data is ever lost, overwritten, or silently mutated.
+
+<div class="feature-grid">
+  <FeatureCard
+    icon="🔍"
+    title="Full SQL Surface"
+    description="DDL, DML, JOINs, CTEs, window functions, aggregates, 60+ built-in functions. Real SQL — not a query DSL."
+    href="/sql/"
+  />
+  <FeatureCard
+    icon="⏰"
+    title="Bitemporal by Default"
+    description="Separate system time (when recorded) from business time (when valid). Time-travel with AS OF and VALID AT."
+    href="/concepts/bitemporal/"
+  />
+  <FeatureCard
+    icon="🤖"
+    title="AI-Native Runtime"
+    description="Embedded Tier-0 AI with inline risk scoring, auto-insights, query advisor, cache advisor, and compaction advisor."
+    href="/ai/"
+  />
+  <FeatureCard
+    icon="🔎"
+    title="Vector Search"
+    description="Native vector similarity search with cosine, euclidean, and dot-product distance metrics. Build RAG pipelines in-database."
+    href="/features/vector-search/"
+  />
+  <FeatureCard
+    icon="⚡"
+    title="Blazing Performance"
+    description="276ns point reads (4× faster than SQLite). 1.9µs point writes (20× faster). Direct shard bypass paths."
+    href="/performance/benchmarks/"
+  />
+  <FeatureCard
+    icon="📦"
+    title="LSM Storage Engine"
+    description="WAL with CRC framing, skip-list memtable, prefix-compressed SSTables, bloom filters, LRU caches, multi-level compaction."
+    href="/storage/wal/"
+  />
+</div>
+
+---
+
+## Performance
+
+<PerformanceChart />
+
+---
+
+## Try SpectraDB SQL
+
+<SqlPlayground />
+
+---
+
+## Quick Start
+
+Install SpectraDB and run your first query in under 5 minutes:
+
+```rust
+use spectradb::{Database, Config};
+
+fn main() -> spectradb::Result<()> {
+    let db = Database::open("my_data", Config::default())?;
+
+    // Create a table
+    db.sql("CREATE TABLE users (id TEXT, name TEXT, email TEXT)", &[])?;
+
+    // Insert data — every write is an immutable fact
+    db.sql("INSERT INTO users VALUES ('u1', 'Alice', 'alice@co.com')", &[])?;
+
+    // Query with full SQL
+    let results = db.sql("SELECT name, email FROM users WHERE id = 'u1'", &[])?;
+    println!("{:?}", results);
+
+    Ok(())
+}
+```
+
+[Get started →](/getting-started/quickstart/)

@@ -1,0 +1,80 @@
+---
+draft: false
+head: []
+title: EXPLAIN
+description: Analyze query execution plans with EXPLAIN and EXPLAIN ANALYZE.
+---
+
+## EXPLAIN
+
+Shows the query execution plan without running the query:
+
+```sql
+EXPLAIN SELECT * FROM users WHERE id = 'u1';
+```
+
+Output:
+```
+PointLookup { key: "table/users/u1", cost: 1.00 }
+```
+
+## EXPLAIN ANALYZE
+
+Executes the query and reports timing and statistics:
+
+```sql
+EXPLAIN ANALYZE SELECT * FROM orders WHERE user_id = 'u_alice' AND status = 'shipped';
+```
+
+Output:
+```
+Filter { predicate: status = 'shipped' }
+  └─ PointLookup { key: 'u_alice', cost: 1.00 }
+
+execution_time_us: 42
+rows_returned: 3
+bloom_filter_hits: 1
+cache_hits: 2
+plan_cost: 1.50
+```
+
+## Plan Nodes
+
+The cost-based planner generates a tree of plan nodes:
+
+| Node | Description | Typical Cost |
+|------|-------------|-------------|
+| `PointLookup` | Single key lookup via bloom + SSTable | 1.0 |
+| `FullScan` | Scans all rows in a table | rows × 0.1 |
+| `Filter` | Applies WHERE predicates | 0.01 per row |
+| `HashJoin` | Hash-based join of two tables | left + right + 0.02 per match |
+| `Sort` | ORDER BY sorting | rows × log(rows) × 0.01 |
+| `Limit` | LIMIT/OFFSET | 0.0 |
+| `Project` | Column selection/expressions | 0.0 |
+
+## Understanding Costs
+
+The planner uses per-column statistics to estimate costs:
+
+- **Row count estimates** from table metadata
+- **Distinct value counts** for join selectivity
+- **Min/max ranges** for range predicate filtering
+- **Top-N frequency histograms** for common value detection
+
+```sql
+-- The planner chooses PointLookup when it detects a primary key filter
+EXPLAIN SELECT * FROM users WHERE id = 'u1';
+-- PointLookup { cost: 1.00 }
+
+-- For range scans, it uses FullScan with Filter
+EXPLAIN SELECT * FROM users WHERE age > 25;
+-- Filter { predicate: age > 25 }
+--   └─ FullScan { table: "users", est_rows: 1000, cost: 100.00 }
+```
+
+## Tips
+
+- Use `EXPLAIN ANALYZE` to measure actual vs. estimated performance
+- High `bloom_filter_hits` indicates efficient key-level filtering
+- High `cache_hits` means your working set fits in the block cache
+- If `execution_time_us` is high, consider adding more specific WHERE predicates

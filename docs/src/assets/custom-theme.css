@@ -1,0 +1,800 @@
+/* =============================================================================
+   SpectraDB Documentation — Custom Theme
+   A comprehensive, modern design system for the SpectraDB docs site.
+   Built on top of Astro Starlight CSS custom properties.
+   ============================================================================= */
+
+/* ---------------------------------------------------------------------------
+   Google Fonts
+   --------------------------------------------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ---------------------------------------------------------------------------
+   Starlight CSS Custom Property Overrides
+   --------------------------------------------------------------------------- */
+:root {
+  /* Accent palette */
+  --sl-color-accent-low: #1e1b4b;
+  --sl-color-accent: #3B82F6;
+  --sl-color-accent-high: #93c5fd;
+
+  /* Neutral scale */
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #f1f5f9;
+  --sl-color-gray-2: #e2e8f0;
+  --sl-color-gray-3: #94a3b8;
+  --sl-color-gray-4: #475569;
+  --sl-color-gray-5: #1e293b;
+  --sl-color-gray-6: #0f172a;
+  --sl-color-black: #020617;
+
+  /* Typography */
+  --sl-font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Content width — slightly wider than Starlight default */
+  --sl-content-width: 55rem;
+
+  /* SpectraDB brand tokens */
+  --spectra-gradient: linear-gradient(135deg, #3B82F6, #8B5CF6);
+  --spectra-blue: #3B82F6;
+  --spectra-violet: #8B5CF6;
+  --spectra-emerald: #10B981;
+  --spectra-amber: #F59E0B;
+  --spectra-dark: #0F172A;
+  --spectra-card-bg: rgba(255, 255, 255, 0.05);
+  --spectra-card-border: rgba(255, 255, 255, 0.1);
+  --spectra-glow: 0 0 20px rgba(59, 130, 246, 0.3);
+}
+
+/* ---------------------------------------------------------------------------
+   Hero Section
+   --------------------------------------------------------------------------- */
+.hero-section {
+  min-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4rem 2rem;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #0F172A, #1e1b4b, #172554, #0F172A);
+  background-size: 400% 400%;
+  animation: hero-gradient 8s ease infinite;
+}
+
+@keyframes hero-gradient {
+  0% {
+    background-position: 0% 50%;
+  }
+  25% {
+    background-position: 100% 50%;
+  }
+  50% {
+    background-position: 100% 0%;
+  }
+  75% {
+    background-position: 0% 100%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.hero-tagline {
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  font-weight: 700;
+  line-height: 1.15;
+  margin-bottom: 1.5rem;
+  background: linear-gradient(135deg, #3B82F6, #8B5CF6);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.hero-stats {
+  display: flex;
+  gap: 3rem;
+  margin: 2.5rem 0;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.hero-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.hero-stat-number {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--sl-color-white);
+  line-height: 1.1;
+}
+
+.hero-stat-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--sl-color-gray-3);
+  margin-top: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hero-cta {
+  display: flex;
+  gap: 1rem;
+  margin-top: 2rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.hero-cta a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1.8rem;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 1rem;
+  text-decoration: none;
+  color: var(--sl-color-white);
+  background: var(--spectra-gradient);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.25);
+}
+
+.hero-cta a:hover {
+  transform: scale(1.05);
+  box-shadow: 0 6px 24px rgba(59, 130, 246, 0.45);
+}
+
+.hero-cta a.secondary {
+  background: transparent;
+  border: 2px solid var(--spectra-card-border);
+  box-shadow: none;
+}
+
+.hero-cta a.secondary:hover {
+  border-color: var(--spectra-blue);
+  box-shadow: var(--spectra-glow);
+}
+
+/* ---------------------------------------------------------------------------
+   Glassmorphism Feature Cards
+   --------------------------------------------------------------------------- */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.feature-card {
+  background: var(--spectra-card-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--spectra-card-border);
+  border-radius: 16px;
+  padding: 2rem;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 32px rgba(59, 130, 246, 0.2);
+}
+
+.feature-card-icon {
+  width: 48px;
+  height: 48px;
+  background: var(--spectra-gradient);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  color: var(--sl-color-white);
+}
+
+.feature-card h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--sl-color-white);
+}
+
+.feature-card p {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--sl-color-gray-3);
+}
+
+/* ---------------------------------------------------------------------------
+   Code Tabs
+   --------------------------------------------------------------------------- */
+.code-tabs {
+  border-radius: 12px;
+  overflow: hidden;
+  background: #1E293B;
+  border: 1px solid var(--spectra-card-border);
+  margin: 1.5rem 0;
+}
+
+.code-tabs-header {
+  display: flex;
+  background: #0F172A;
+  border-bottom: 1px solid var(--spectra-card-border);
+}
+
+.code-tab-button {
+  padding: 0.75rem 1.25rem;
+  border: none;
+  background: transparent;
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.code-tab-button:hover {
+  color: var(--sl-color-gray-2);
+}
+
+.code-tab-button.active {
+  color: var(--sl-color-white);
+  border-bottom: 2px solid var(--spectra-blue);
+}
+
+.code-tab-content {
+  padding: 0;
+}
+
+.code-tab-content pre {
+  margin: 0;
+  border-radius: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Performance Chart
+   --------------------------------------------------------------------------- */
+.perf-chart {
+  max-width: 700px;
+  margin: 2rem auto;
+}
+
+.perf-bar-group {
+  margin-bottom: 1.5rem;
+}
+
+.perf-bar-label {
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--sl-color-gray-2);
+}
+
+.perf-bar {
+  height: 32px;
+  border-radius: 8px;
+  position: relative;
+  background: var(--spectra-card-bg);
+  overflow: hidden;
+}
+
+.perf-bar-fill {
+  height: 100%;
+  border-radius: 8px;
+  position: absolute;
+  left: 0;
+  top: 0;
+  animation: bar-grow 1.2s ease-out forwards;
+  transform-origin: left;
+}
+
+.perf-bar-fill.spectra {
+  background: var(--spectra-gradient);
+}
+
+.perf-bar-fill.sqlite {
+  background: #64748b;
+}
+
+.perf-bar-fill.sled {
+  background: #f59e0b;
+}
+
+.perf-bar-fill.redb {
+  background: #10b981;
+}
+
+.perf-bar-value {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--sl-color-white);
+  z-index: 1;
+}
+
+@keyframes bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   SQL Playground
+   --------------------------------------------------------------------------- */
+.sql-playground {
+  border-radius: 12px;
+  border: 1px solid var(--spectra-card-border);
+  overflow: hidden;
+  background: #0F172A;
+  margin: 1.5rem 0;
+}
+
+.sql-playground-header {
+  padding: 1rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #1E293B;
+  border-bottom: 1px solid var(--spectra-card-border);
+}
+
+.sql-playground-header select {
+  background: #0F172A;
+  color: var(--sl-color-white);
+  border: 1px solid var(--spectra-card-border);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font-family: var(--sl-font);
+  font-size: 0.85rem;
+}
+
+.sql-run-btn {
+  background: var(--spectra-gradient);
+  border: none;
+  color: var(--sl-color-white);
+  padding: 0.5rem 1.2rem;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease;
+}
+
+.sql-run-btn:hover {
+  box-shadow: var(--spectra-glow);
+}
+
+.sql-editor {
+  padding: 1.5rem;
+  font-family: var(--sl-font-mono);
+  white-space: pre;
+  line-height: 1.6;
+  color: #e2e8f0;
+  min-height: 120px;
+  font-size: 0.9rem;
+}
+
+.sql-results {
+  border-top: 1px solid var(--spectra-card-border);
+  padding: 1rem 1.5rem;
+}
+
+.sql-results table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sql-results th {
+  text-align: left;
+  padding: 0.5rem 1rem;
+  border-bottom: 2px solid var(--spectra-blue);
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--spectra-blue);
+}
+
+.sql-results td {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--spectra-card-border);
+  font-size: 0.85rem;
+  color: var(--sl-color-gray-2);
+}
+
+.sql-results tr:last-child td {
+  border-bottom: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Config Explorer
+   --------------------------------------------------------------------------- */
+.config-explorer {
+  border-radius: 12px;
+  border: 1px solid var(--spectra-card-border);
+  overflow: hidden;
+  margin: 1.5rem 0;
+}
+
+.config-search {
+  width: 100%;
+  padding: 0.8rem 1.2rem;
+  background: #1E293B;
+  border: none;
+  border-bottom: 1px solid var(--spectra-card-border);
+  color: var(--sl-color-white);
+  font-size: 0.95rem;
+  font-family: var(--sl-font);
+  outline: none;
+}
+
+.config-search::placeholder {
+  color: var(--sl-color-gray-3);
+}
+
+.config-search:focus {
+  background: #253349;
+}
+
+.config-group {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--spectra-card-border);
+}
+
+.config-group:last-child {
+  border-bottom: none;
+}
+
+.config-group-title {
+  font-weight: 600;
+  color: var(--spectra-blue);
+  margin-bottom: 0.75rem;
+  font-size: 0.95rem;
+}
+
+.config-item {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  display: grid;
+  grid-template-columns: 1fr 120px auto;
+  gap: 1rem;
+  align-items: center;
+}
+
+.config-item:last-child {
+  border-bottom: none;
+}
+
+.config-item-name {
+  font-family: var(--sl-font-mono);
+  font-weight: 500;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+}
+
+.config-item-default {
+  font-family: var(--sl-font-mono);
+  font-size: 0.85rem;
+  color: var(--spectra-emerald);
+}
+
+.config-item-desc {
+  grid-column: 1 / -1;
+  font-size: 0.85rem;
+  color: var(--sl-color-gray-3);
+  margin-top: 0.25rem;
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------------------
+   Timeline Visual (Bitemporal)
+   --------------------------------------------------------------------------- */
+.timeline-container {
+  position: relative;
+  padding: 2rem 0;
+}
+
+.timeline-axis {
+  position: relative;
+  height: 3px;
+  background: var(--spectra-card-border);
+  margin: 2rem 0;
+}
+
+.timeline-axis-label {
+  position: absolute;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--sl-color-gray-3);
+}
+
+.timeline-event {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--spectra-gradient);
+  transform: translate(-50%, -50%);
+  top: 50%;
+  animation: pulse-dot 2s ease-in-out infinite;
+  z-index: 2;
+}
+
+.timeline-event-label {
+  position: absolute;
+  top: 20px;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  color: var(--sl-color-gray-3);
+}
+
+.timeline-query-range {
+  position: absolute;
+  height: 100%;
+  background: rgba(59, 130, 246, 0.15);
+  border-left: 2px dashed var(--spectra-blue);
+  border-right: 2px dashed var(--spectra-blue);
+  top: 0;
+  z-index: 1;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Architecture Diagram
+   --------------------------------------------------------------------------- */
+.arch-diagram {
+  background: #0F172A;
+  border-radius: 12px;
+  padding: 2rem;
+  border: 1px solid var(--spectra-card-border);
+  overflow-x: auto;
+  margin: 1.5rem 0;
+}
+
+.arch-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ---------------------------------------------------------------------------
+   Scroll Reveal Animations
+   --------------------------------------------------------------------------- */
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reveal-stagger > * {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.reveal-stagger.visible > * {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reveal-stagger > *:nth-child(1) {
+  transition-delay: 0.1s;
+}
+
+.reveal-stagger > *:nth-child(2) {
+  transition-delay: 0.2s;
+}
+
+.reveal-stagger > *:nth-child(3) {
+  transition-delay: 0.3s;
+}
+
+.reveal-stagger > *:nth-child(4) {
+  transition-delay: 0.4s;
+}
+
+.reveal-stagger > *:nth-child(5) {
+  transition-delay: 0.5s;
+}
+
+.reveal-stagger > *:nth-child(6) {
+  transition-delay: 0.6s;
+}
+
+/* ---------------------------------------------------------------------------
+   Utility Classes
+   --------------------------------------------------------------------------- */
+.gradient-text {
+  background: var(--spectra-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--spectra-blue);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.badge.emerald {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--spectra-emerald);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.badge.amber {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--spectra-amber);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.badge.violet {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--spectra-violet);
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+/* ---------------------------------------------------------------------------
+   Starlight Default Overrides
+   --------------------------------------------------------------------------- */
+
+/* Remove conflicting Starlight heading decoration */
+starlight-head {
+  all: unset;
+}
+
+/* Smoother link colors */
+a {
+  transition: color 0.2s ease;
+}
+
+/* Nicer inline code */
+:not(pre) > code {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  border-radius: 4px;
+  padding: 0.15em 0.35em;
+  font-size: 0.88em;
+}
+
+/* Make code blocks fit the theme */
+pre {
+  border: 1px solid var(--spectra-card-border) !important;
+  border-radius: 10px !important;
+}
+
+/* Table styling within Starlight content */
+.sl-markdown-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.5rem 0;
+}
+
+.sl-markdown-content th {
+  background: rgba(59, 130, 246, 0.08);
+  border-bottom: 2px solid var(--spectra-blue);
+  padding: 0.6rem 1rem;
+  text-align: left;
+  font-weight: 600;
+}
+
+.sl-markdown-content td {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--spectra-card-border);
+}
+
+/* Sidebar refinements */
+nav.sidebar a[aria-current='page'] {
+  background: rgba(59, 130, 246, 0.1);
+  border-left: 3px solid var(--spectra-blue);
+}
+
+/* ---------------------------------------------------------------------------
+   Responsive Design
+   --------------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  .hero-section {
+    min-height: 60vh;
+    padding: 3rem 1.5rem;
+  }
+
+  .hero-tagline {
+    font-size: clamp(1.6rem, 6vw, 2.4rem);
+  }
+
+  .hero-stats {
+    flex-wrap: wrap;
+    gap: 1.5rem;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .config-item {
+    grid-template-columns: 1fr;
+  }
+
+  .config-item-default {
+    justify-self: start;
+  }
+
+  .perf-chart {
+    max-width: 100%;
+  }
+
+  .arch-diagram {
+    padding: 1rem;
+  }
+
+  .sql-playground-header {
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 480px) {
+  .hero-cta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero-cta a {
+    justify-content: center;
+  }
+
+  .code-tabs-header {
+    flex-wrap: wrap;
+  }
+
+  .code-tab-button {
+    flex: 1;
+    text-align: center;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.8rem;
+  }
+
+  .hero-stat-number {
+    font-size: 2rem;
+  }
+
+  .feature-card {
+    padding: 1.5rem;
+  }
+}

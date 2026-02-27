@@ -1,0 +1,91 @@
+---
+draft: false
+head: []
+title: Configuration
+description: Complete reference for SpectraDB configuration parameters with interactive explorer.
+---
+
+import ConfigExplorer from '../../../components/ConfigExplorer.astro';
+
+SpectraDB is configured through the `Config` struct. All parameters have sensible defaults — you can start with `Config::default()` and tune as needed.
+
+## Basic Usage
+
+```rust
+use spectradb::{Database, Config};
+
+// Use defaults
+let db = Database::open("data", Config::default())?;
+
+// Custom configuration
+let mut config = Config::default();
+config.memtable_max_bytes = 8 * 1024 * 1024;  // 8MB memtable
+config.shard_count = 8;                         // 8 shards
+config.ai_auto_insights = true;                 // Enable AI insights
+config.fast_write_enabled = true;               // Direct write path
+
+let db = Database::open("data", config)?;
+```
+
+## Configuration Reference
+
+Search and browse all configuration parameters:
+
+<ConfigExplorer />
+
+## Tuning Profiles
+
+### High-Throughput Writes
+
+For write-heavy workloads (event logging, time-series ingestion):
+
+```rust
+let mut config = Config::default();
+config.memtable_max_bytes = 16 * 1024 * 1024;  // 16MB — flush less often
+config.wal_fsync_every_n_records = 512;          // Batch more WAL syncs
+config.fast_write_enabled = true;                // Direct path (default)
+config.fast_write_wal_batch_interval_us = 2000;  // 2ms batch window
+config.shard_count = 8;                          // More parallelism
+```
+
+### Low-Latency Reads
+
+For read-heavy workloads (OLTP, key-value lookups):
+
+```rust
+let mut config = Config::default();
+config.block_cache_bytes = 128 * 1024 * 1024;   // 128MB block cache
+config.index_cache_entries = 4096;                // Cache more indexes
+config.bloom_bits_per_key = 14;                   // Lower false positives
+config.compaction_l0_threshold = 4;               // Compact sooner
+```
+
+### AI-Enabled
+
+For workloads that benefit from AI advisors:
+
+```rust
+let mut config = Config::default();
+config.ai_auto_insights = true;
+config.ai_inline_risk_assessment = true;
+config.ai_annotate_reads = true;
+config.ai_compaction_advisor = true;
+config.ai_cache_advisor = true;
+config.ai_access_stats_size = 4096;  // Track more keys
+```
+
+## Validation
+
+SpectraDB validates configuration at startup. Invalid configurations return a `SpectraError::Config` error:
+
+```rust
+let mut config = Config::default();
+config.memtable_max_bytes = 100;  // Too small! Must be >= 1024
+
+match Database::open("data", config) {
+    Err(spectradb::SpectraError::Config(msg)) => {
+        eprintln!("Invalid config: {}", msg);
+    }
+    _ => {}
+}
+```

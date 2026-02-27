@@ -1,0 +1,63 @@
+---
+draft: false
+head: []
+title: Prepared Statements
+description: Parameterized SQL queries with $1, $2, ... placeholders.
+---
+
+SpectraDB supports prepared statements with positional parameter placeholders (`$1`, `$2`, ...) for safe, efficient parameterized queries.
+
+## Usage
+
+```rust
+use spectradb::Value;
+
+// Parameterized query
+let results = db.sql(
+    "SELECT name, email FROM users WHERE id = $1",
+    &[Value::Text("u1".into())]
+)?;
+
+// Multiple parameters
+let results = db.sql(
+    "SELECT * FROM orders WHERE user_id = $1 AND status = $2",
+    &[Value::Text("u1".into()), Value::Text("shipped".into())]
+)?;
+
+// Numeric parameters
+let results = db.sql(
+    "SELECT * FROM products WHERE price > $1 AND price < $2",
+    &[Value::Real(10.0), Value::Real(50.0)]
+)?;
+```
+
+## Benefits
+
+- **SQL injection prevention** — Parameters are never interpolated into the SQL string
+- **Type safety** — Parameters are typed `Value` instances
+- **Reusability** — Parse the SQL once, execute with different parameters
+
+## Parameter Types
+
+Any `Value` type can be used as a parameter:
+
+| Value Type | Example |
+|------------|---------|
+| `Value::Text(s)` | String values |
+| `Value::Integer(n)` | Integer values |
+| `Value::Real(f)` | Floating-point values |
+| `Value::Bool(b)` | Boolean values |
+| `Value::Null` | NULL values |
+
+## With INSERT
+
+```rust
+db.sql(
+    "INSERT INTO users (id, name, email) VALUES ($1, $2, $3)",
+    &[
+        Value::Text("u2".into()),
+        Value::Text("Bob".into()),
+        Value::Text("bob@co.com".into()),
+    ]
+)?;
+```

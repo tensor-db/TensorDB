@@ -1,0 +1,50 @@
+---
+draft: false
+head: []
+title: Replication
+description: Data replication across SpectraDB cluster nodes.
+---
+
+:::note[Roadmap Feature]
+Multi-node replication is planned for a future release.
+:::
+
+## Replication Model
+
+SpectraDB's append-only architecture simplifies replication:
+
+- **No conflict resolution needed**: Facts are immutable and identified by (key, commit_ts)
+- **Simple synchronization**: Replicate the WAL log entries
+- **Temporal consistency**: commit_ts ordering is preserved across replicas
+
+## Planned Features
+
+### Synchronous Replication
+
+Writes are committed only after replication to a majority of nodes:
+
+```
+Client → Leader → Replicate to Followers → Majority ACK → Commit → Response
+```
+
+### Asynchronous Replication
+
+For lower-latency writes with eventual consistency:
+
+```
+Client → Leader → Commit → Response (async replicate to followers)
+```
+
+### Read Replicas
+
+Dedicated read replicas for scaling read-heavy workloads:
+- Receive streamed WAL updates from the leader
+- Serve read queries with bounded staleness
+- No write capability
+
+## SSTable-Level Replication
+
+Because SSTables are immutable, they can be replicated at the file level:
+- New SSTables are transmitted to followers after compaction
+- Followers apply the same manifest updates
+- No need to replay individual writes

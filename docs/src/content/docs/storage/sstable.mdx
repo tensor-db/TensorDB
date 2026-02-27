@@ -1,0 +1,54 @@
+---
+draft: false
+head: []
+title: SSTables
+description: SpectraDB's on-disk sorted string tables with block indexing and prefix compression.
+---
+
+SSTables (Sorted String Tables) are the immutable on-disk format for SpectraDB's data.
+
+## Structure
+
+Each SSTable contains:
+
+```
+┌─────────────────────┐
+│ Data Block 0        │  ← Key-value pairs, prefix-compressed
+│ Data Block 1        │
+│ ...                 │
+│ Data Block N        │
+├─────────────────────┤
+│ Block Index         │  ← Maps key ranges to block offsets
+├─────────────────────┤
+│ Bloom Filter        │  ← Probabilistic key membership test
+├─────────────────────┤
+│ Footer              │  ← Offsets to index and bloom filter
+└─────────────────────┘
+```
+
+## Data Blocks
+
+- Fixed-size blocks (default: 16KB, configurable via `sstable_block_bytes`)
+- **Prefix compression**: Keys sharing a common prefix store only the differing suffix
+- Sorted by key within each block
+- Independently addressable for random access
+
+## Block Index
+
+The block index maps the first key of each block to its file offset, enabling binary search for point lookups.
+
+## Immutability
+
+SSTables are **never modified** after creation. This provides:
+- Safe concurrent reads without locks
+- Crash safety (no partial updates)
+- Simple backup and replication (just copy files)
+
+The manifest file tracks which SSTables are active; it's atomically replaced during compaction.
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `sstable_block_bytes` | 16KB | Data block size |
+| `sstable_max_file_bytes` | 64MB | Maximum SSTable file size |

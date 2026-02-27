@@ -1,0 +1,92 @@
+---
+draft: false
+head: []
+title: Bitemporal Model
+description: Understanding system time and business time — the two temporal dimensions in SpectraDB.
+---
+
+import TimelineVisual from '../../../components/TimelineVisual.astro';
+
+SpectraDB is a **bitemporal** database. Every fact exists in two independent time dimensions:
+
+1. **System time** (`commit_ts`) — when the database recorded the fact
+2. **Business time** (`valid_from` / `valid_to`) — when the fact was true in the real world
+
+<TimelineVisual />
+
+## Why Bitemporal?
+
+Consider an insurance rate that changes quarterly. On April 1st, the rate changes from 3.5% to 4.0%. But you might not record this change until April 3rd.
+
+- **System time**: April 3rd (when you wrote it)
+- **Business time**: April 1st to June 30th (when the rate was actually valid)
+
+Without bitemporality, you can't distinguish between "what we knew then" and "what was actually true."
+
+## System Time: AS OF
+
+`AS OF` queries the database as it was at a specific commit timestamp:
+
+```sql
+-- What did the database look like at commit 500?
+SELECT * FROM accounts AS OF 500;
+```
+
+This is **time travel** — you see exactly what a reader would have seen at that point in time, even if newer data has been written since.
+
+### Use Cases
+
+- **Audit trails**: Prove what was known at a specific time
+- **Debugging**: Reproduce exact application state
+- **Regulatory compliance**: Answer "what did you know, and when?"
+
+## Business Time: VALID AT
+
+`VALID AT` queries which facts were valid at a specific business timestamp:
+
+```sql
+-- What rate was in effect on June 15, 2024?
+SELECT rate FROM policies VALID AT 1718409600;
+```
+
+### Writing with Business Time
+
+```rust
+use spectradb::Value;
+
+// Record a rate valid from Jan 1 to Jun 30, 2024
+db.put_temporal(
+    "policy/POL-001/rate",
+    Value::Real(3.5),
+    1704067200,  // valid_from: Jan 1, 2024
+    1719705600,  // valid_to: Jun 30, 2024
+)?;
+
+// Record a new rate valid from Jul 1 to Dec 31, 2024
+db.put_temporal(
+    "policy/POL-001/rate",
+    Value::Real(4.25),
+    1719705600,  // valid_from: Jul 1, 2024
+    1735689600,  // valid_to: Dec 31, 2024
+)?;
+```
+
+## Combined Queries
+
+The real power is combining both dimensions:
+
+```sql
+-- What rate was known at commit 200, that was valid on June 15?
+SELECT rate FROM policies AS OF 200 VALID AT 1718409600;
+```
+
+This answers: "Based on what the system knew at time 200, what rate was valid in June?"
+
+## Key Properties
+
+| Property | Description |
+|----------|-------------|
+| All versions preserved | Compaction never drops temporal versions |
+| System time is monotonic | `commit_ts` always increases within a shard |
+| Business time is arbitrary | `valid_from` / `valid_to` can be any timestamp |
+| Default business time | If not specified, `valid_from = now`, `valid_to = infinity` |

@@ -1,0 +1,73 @@
+---
+draft: false
+head: []
+title: Event Sourcing
+description: Using SpectraDB as an event store for event-sourced architectures.
+---
+
+SpectraDB's append-only, immutable architecture makes it a natural fit for event sourcing.
+
+## What is Event Sourcing?
+
+Instead of storing current state, you store a sequence of events. The current state is derived by replaying events.
+
+## SpectraDB as an Event Store
+
+```rust
+use spectradb::Value;
+
+// Append events
+db.put("account/acc-001/events/1", Value::Text(
+    r#"{"type":"AccountOpened","balance":0}"#.into()
+))?;
+
+db.put("account/acc-001/events/2", Value::Text(
+    r#"{"type":"Deposited","amount":500}"#.into()
+))?;
+
+db.put("account/acc-001/events/3", Value::Text(
+    r#"{"type":"Withdrawn","amount":100}"#.into()
+))?;
+
+// Replay events to build current state
+let events = db.scan_prefix("account/acc-001/events/")?;
+let mut balance = 0i64;
+for (_key, value) in events {
+    // Parse and apply each event
+    // balance = apply(balance, event);
+}
+```
+
+## Benefits
+
+| Feature | Benefit for Event Sourcing |
+|---------|---------------------------|
+| Immutability | Events are never modified — append-only by design |
+| Temporal queries | Replay to any point with `AS OF` |
+| Change feeds | Subscribe to new events in real time |
+| Full history | No data loss — every event is preserved permanently |
+| SQL queries | Materialize views with SQL aggregations |
+
+## Change Feeds
+
+Subscribe to events in real time:
+
+```rust
+let mut feed = db.subscribe()?;
+while let Some(event) = feed.next() {
+    println!("New event: {:?}", event);
+    // Update materialized views, notify downstream systems
+}
+```
+
+## Snapshots
+
+For performance, periodically create snapshots:
+
+```rust
+// Store a snapshot of the current state
+let snapshot = calculate_current_state(&events);
+db.put("account/acc-001/snapshot", Value::Text(snapshot.to_json()))?;
+
+// Later: load snapshot + replay events since snapshot
+```

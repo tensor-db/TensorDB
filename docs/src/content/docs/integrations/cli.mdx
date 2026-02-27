@@ -1,0 +1,63 @@
+---
+draft: false
+head: []
+title: CLI
+description: SpectraDB's interactive SQL shell for command-line database management.
+---
+
+The SpectraDB CLI provides an interactive SQL shell powered by clap and rustyline.
+
+## Installation
+
+```bash
+cargo build --release -p spectradb-cli
+```
+
+## Usage
+
+```bash
+# Open a database (creates if doesn't exist)
+spectradb-cli ./my_data
+
+# With custom options
+spectradb-cli --shard-count 8 ./my_data
+```
+
+## Interactive Shell
+
+```
+$ spectradb-cli ./my_data
+SpectraDB v0.28 — Interactive SQL Shell
+Type .help for commands, Ctrl+D to exit.
+
+spectradb> CREATE TABLE users (id TEXT, name TEXT, email TEXT);
+OK
+
+spectradb> INSERT INTO users VALUES ('u1', 'Alice', 'alice@example.com');
+1 row inserted (commit_ts: 1)
+
+spectradb> SELECT * FROM users;
+id | name  | email
+---+-------+------------------
+u1 | Alice | alice@example.com
+(1 row)
+
+spectradb> EXPLAIN SELECT * FROM users WHERE id = 'u1';
+PointLookup { key: "table/users/u1", cost: 1.00 }
+```
+
+## Dot Commands
+
+| Command | Description |
+|---------|-------------|
+| `.help` | Show available commands |
+| `.tables` | List all tables |
+| `.schema <table>` | Show table schema |
+| `.quit` | Exit the shell |
+
+## Features
+
+- **Tab completion**: Table names and SQL keywords
+- **History**: Arrow keys navigate command history
+- **Multi-line**: Statements continue until `;`
+- **Formatted output**: Aligned columns with borders

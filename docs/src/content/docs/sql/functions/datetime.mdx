@@ -1,0 +1,60 @@
+---
+draft: false
+head: []
+title: Date/Time Functions
+description: Timestamp and date manipulation functions in SpectraDB SQL.
+---
+
+SpectraDB uses Unix timestamps (u64) for all temporal operations.
+
+## NOW
+
+```sql
+SELECT NOW();   -- Current Unix timestamp in seconds
+```
+
+## DATE / TIME / DATETIME
+
+```sql
+SELECT DATE(1718409600);       -- '2024-06-15'
+SELECT TIME(1718409600);       -- '00:00:00'
+SELECT DATETIME(1718409600);   -- '2024-06-15 00:00:00'
+```
+
+## STRFTIME
+
+```sql
+SELECT STRFTIME('%Y-%m-%d', 1718409600);       -- '2024-06-15'
+SELECT STRFTIME('%H:%M:%S', 1718409600);       -- '00:00:00'
+SELECT STRFTIME('%Y-%m-%d %H:%M', 1718409600); -- '2024-06-15 00:00'
+```
+
+## EXTRACT
+
+```sql
+SELECT EXTRACT(YEAR FROM 1718409600);    -- 2024
+SELECT EXTRACT(MONTH FROM 1718409600);   -- 6
+SELECT EXTRACT(DAY FROM 1718409600);     -- 15
+```
+
+## DATE_ADD / DATE_SUB
+
+```sql
+-- Add 7 days (604800 seconds)
+SELECT DATE_ADD(1718409600, 604800);   -- 1719014400
+
+-- Subtract 30 days
+SELECT DATE_SUB(1718409600, 2592000);  -- 1715817600
+```
+
+## EPOCH
+
+```sql
+SELECT EPOCH('2024-06-15');   -- 1718409600
+```
+
+## DATE_DIFF
+
+```sql
+SELECT DATE_DIFF(1719014400, 1718409600);  -- 604800 (7 days in seconds)
+```

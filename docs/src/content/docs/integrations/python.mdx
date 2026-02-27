@@ -1,0 +1,91 @@
+---
+draft: false
+head: []
+title: Python Bindings
+description: Using SpectraDB from Python with PyO3 bindings.
+---
+
+SpectraDB provides Python bindings via PyO3/maturin, giving Python applications access to the full database engine.
+
+## Installation
+
+```bash
+pip install spectradb
+```
+
+## Quick Start
+
+```python
+import spectradb
+
+# Open a database
+db = spectradb.open("my_data")
+
+# Create a table
+db.sql("CREATE TABLE users (id TEXT, name TEXT, email TEXT)")
+
+# Insert data
+db.sql("INSERT INTO users VALUES ('u1', 'Alice', 'alice@co.com')")
+db.sql("INSERT INTO users VALUES ('u2', 'Bob', 'bob@co.com')")
+
+# Query
+results = db.sql("SELECT * FROM users WHERE id = 'u1'")
+for row in results:
+    print(row)
+```
+
+## Key-Value API
+
+```python
+# Write
+db.put("user/alice", "Alice Chen")
+
+# Read
+value = db.get("user/alice")
+print(value)  # "Alice Chen"
+
+# Scan
+for key, value in db.scan_prefix("user/"):
+    print(f"{key}: {value}")
+```
+
+## Temporal Operations
+
+```python
+# Time-travel read
+value = db.get_as_of("user/alice", commit_ts=500)
+
+# Bitemporal write
+db.put_temporal("policy/rate", 4.25, valid_from=1704067200, valid_to=1735689600)
+
+# Bitemporal query
+results = db.sql("SELECT * FROM policies VALID AT 1718409600")
+```
+
+## Prepared Statements
+
+```python
+results = db.sql(
+    "SELECT * FROM users WHERE id = $1",
+    params=["u1"]
+)
+```
+
+## Configuration
+
+```python
+config = spectradb.Config()
+config.shard_count = 8
+config.memtable_max_bytes = 8 * 1024 * 1024
+config.ai_auto_insights = True
+
+db = spectradb.open("my_data", config=config)
+```
+
+## Building from Source
+
+```bash
+cd crates/spectradb-python
+pip install maturin
+maturin develop --release
+```

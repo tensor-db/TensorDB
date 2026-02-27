@@ -1,0 +1,49 @@
+---
+draft: false
+head: []
+title: Compression
+description: LZ4 block compression for SSTables in SpectraDB.
+---
+
+SpectraDB uses LZ4 block compression to reduce SSTable disk usage while maintaining fast read performance.
+
+## LZ4
+
+LZ4 is chosen for its excellent decompression speed:
+
+| Metric | LZ4 | zstd | gzip |
+|--------|-----|------|------|
+| Compression speed | ~780 MB/s | ~500 MB/s | ~90 MB/s |
+| Decompression speed | ~4400 MB/s | ~1600 MB/s | ~400 MB/s |
+| Compression ratio | ~2.1× | ~2.9× | ~3.1× |
+
+LZ4 prioritizes speed over compression ratio — ideal for a database where decompression latency matters.
+
+## Block-Level Compression
+
+Compression operates at the SSTable block level (default: 16KB blocks):
+
+1. Data blocks are filled with sorted key-value pairs
+2. Each block is independently LZ4-compressed
+3. The block index stores compressed offsets
+4. On read, only the needed block is decompressed
+
+Block-level compression allows random access — you don't need to decompress the entire file.
+
+## Space Savings
+
+Typical compression ratios for SpectraDB data:
+
+| Data Type | Ratio | Explanation |
+|-----------|-------|-------------|
+| JSON/text | 2–4× | High redundancy in JSON keys and text |
+| Numeric data | 1.5–2× | Less compressible |
+| Binary/blobs | 1.1–1.5× | Already compact |
+| Mixed workloads | ~2× | Typical overall savings |
+
+## Performance Impact
+
+- **Writes**: Small overhead (~2% CPU) for compression during flush
+- **Reads**: Negligible — LZ4 decompresses at 4.4 GB/s
+- **Disk I/O**: Significant reduction — fewer bytes to read from disk
+- **Cache efficiency**: Compressed data means more data fits in cache

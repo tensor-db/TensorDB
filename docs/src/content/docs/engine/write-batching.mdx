@@ -1,0 +1,54 @@
+---
+draft: false
+head: []
+title: Write Batching
+description: Amortizing WAL overhead with batch writes in SpectraDB.
+---
+
+Write batching groups multiple writes into a single WAL operation, amortizing the fsync cost.
+
+## Rust API
+
+```rust
+use spectradb::Value;
+
+let batch = vec![
+    ("user/alice", Value::Text("Alice".into())),
+    ("user/bob", Value::Text("Bob".into())),
+    ("user/carol", Value::Text("Carol".into())),
+];
+
+db.put_batch(batch)?;
+```
+
+## SQL Batching
+
+Multiple INSERT statements within a single `sql()` call benefit from the group WAL batching:
+
+```rust
+db.sql("INSERT INTO users (id, name) VALUES ('u1', 'Alice')", &[])?;
+db.sql("INSERT INTO users (id, name) VALUES ('u2', 'Bob')", &[])?;
+db.sql("INSERT INTO users (id, name) VALUES ('u3', 'Carol')", &[])?;
+// Each write hits the fast path; group WAL batches the fsyncs
+```
+
+## Performance Benefits
+
+| Approach | Latency per Write | Throughput |
+|----------|------------------|------------|
+| Single writes (fast path) | ~1.9µs | ~500K/s |
+| Batch writes | ~0.8µs amortized | ~1.2M/s |
+
+The key benefit is amortizing the WAL fsync cost across multiple writes. With the group WAL, writes within the same batch interval share a single `fdatasync` call.
+
+## When to Batch
+
+- **Bulk data loading**: Import large datasets efficiently
+- **Event ingestion**: Buffer events and write in batches
+- **Multi-row operations**: Write related data atomically
+
+## Best Practices
+
+- Keep batch sizes reasonable (100–10,000 items)
+- All writes in a batch route to their respective shards independently
+- Batch writes maintain the same durability guarantees as single writes

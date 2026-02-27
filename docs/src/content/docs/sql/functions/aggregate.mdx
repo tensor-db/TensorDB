@@ -1,0 +1,72 @@
+---
+draft: false
+head: []
+title: Aggregate Functions
+description: GROUP BY aggregate functions in SpectraDB SQL.
+---
+
+Aggregate functions operate on groups of rows and return a single value per group.
+
+## COUNT
+
+```sql
+SELECT COUNT(*) FROM users;
+SELECT COUNT(email) FROM users;  -- Excludes NULLs
+SELECT COUNT(DISTINCT category) FROM products;
+```
+
+## SUM
+
+```sql
+SELECT SUM(price) FROM products;
+SELECT SUM(price) FROM products WHERE category = 'tools';
+```
+
+## AVG
+
+```sql
+SELECT AVG(price) FROM products;
+SELECT category, AVG(price) FROM products GROUP BY category;
+```
+
+## MIN / MAX
+
+```sql
+SELECT MIN(price), MAX(price) FROM products;
+SELECT category, MIN(price), MAX(price) FROM products GROUP BY category;
+```
+
+## GROUP_CONCAT
+
+```sql
+SELECT category, GROUP_CONCAT(name) FROM products GROUP BY category;
+-- tools: "Widget,Gizmo"
+
+SELECT GROUP_CONCAT(name, ' | ') FROM products;
+-- "Widget | Gadget | Gizmo"
+```
+
+## TOTAL
+
+```sql
+-- Like SUM but returns 0.0 instead of NULL for empty sets
+SELECT TOTAL(price) FROM products WHERE category = 'nonexistent';
+-- 0.0 (SUM would return NULL)
+```
+
+## Combined Example
+
+```sql
+SELECT
+    category,
+    COUNT(*) as count,
+    AVG(price) as avg_price,
+    MIN(price) as min_price,
+    MAX(price) as max_price,
+    SUM(price) as total,
+    GROUP_CONCAT(name) as names
+FROM products
+GROUP BY category
+HAVING count > 1
+ORDER BY avg_price DESC;
+```

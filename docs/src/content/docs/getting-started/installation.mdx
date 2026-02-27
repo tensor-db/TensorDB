@@ -1,0 +1,112 @@
+---
+draft: false
+head: []
+title: Installation
+description: How to install SpectraDB in your Rust project, build from source, or use language bindings.
+---
+
+## Cargo (Recommended)
+
+Add SpectraDB to your `Cargo.toml`:
+
+```toml
+[dependencies]
+spectradb = "0.28"
+```
+
+Or use `cargo add`:
+
+```bash
+cargo add spectradb
+```
+
+## Build from Source
+
+```bash
+git clone https://github.com/spectra-db/SpectraDB.git
+cd SpectraDB
+cargo build --release
+```
+
+### Optional Features
+
+SpectraDB supports optional compile-time features for hardware acceleration:
+
+| Feature | Flag | Description |
+|---------|------|-------------|
+| **C++ Acceleration** | `--features native` | Enables C++ acceleration via cxx for hashing, compression, and bloom filters |
+| **SIMD** | `--features simd` | Hardware-accelerated bloom filters and checksums |
+| **io_uring** | `--features io-uring` | Linux async I/O for reduced syscall overhead |
+
+```bash
+# Build with all optional features
+cargo build --release --features native,simd,io-uring
+```
+
+:::note
+The pure-Rust path is always fully functional. Native features are performance optimizations only.
+:::
+
+## Python Bindings
+
+```bash
+pip install spectradb
+```
+
+```python
+import spectradb
+
+db = spectradb.open("my_data")
+db.sql("CREATE TABLE users (id TEXT, name TEXT)")
+db.sql("INSERT INTO users VALUES ('u1', 'Alice')")
+results = db.sql("SELECT * FROM users")
+```
+
+See the [Python integration guide](/integrations/python/) for details.
+
+## Node.js Bindings
+
+```bash
+npm install spectradb
+```
+
+```javascript
+const { Database } = require('spectradb');
+
+const db = Database.open('my_data');
+db.sql("CREATE TABLE users (id TEXT, name TEXT)");
+db.sql("INSERT INTO users VALUES ('u1', 'Alice')");
+const results = db.sql("SELECT * FROM users");
+```
+
+See the [Node.js integration guide](/integrations/nodejs/) for details.
+
+## CLI
+
+The SpectraDB CLI provides an interactive SQL shell:
+
+```bash
+# Build the CLI
+cargo build --release -p spectradb-cli
+
+# Run it
+./target/release/spectradb-cli ./my_data
+```
+
+```
+spectradb> CREATE TABLE test (id TEXT, value TEXT);
+OK
+spectradb> INSERT INTO test VALUES ('k1', 'hello');
+1 row inserted
+spectradb> SELECT * FROM test;
+id | value
+---+------
+k1 | hello
+```
+
+## System Requirements
+
+- **Rust**: 1.75+ (stable)
+- **OS**: Linux, macOS, Windows
+- **io_uring**: Linux 5.1+ (optional)
+- **C++ toolchain**: Required only for `--features native`

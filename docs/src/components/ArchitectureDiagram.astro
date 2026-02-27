@@ -1,0 +1,295 @@
+---
+// Architecture diagram for SpectraDB
+// Shows: Client → Database → Shards → WAL/Memtable → SSTable Levels
+---
+
+<div class="arch-diagram">
+  <div class="arch-title">SpectraDB Architecture</div>
+
+  <div class="arch-flow">
+    <!-- Client Layer -->
+    <div class="arch-layer">
+      <div class="arch-node client">
+        <div class="arch-node-icon">📱</div>
+        <div class="arch-node-label">Client</div>
+        <div class="arch-node-detail">SQL / Rust API / Python / Node.js</div>
+      </div>
+    </div>
+
+    <div class="arch-arrow">▼</div>
+
+    <!-- Database Layer -->
+    <div class="arch-layer">
+      <div class="arch-node database">
+        <div class="arch-node-icon">⚡</div>
+        <div class="arch-node-label">Database Engine</div>
+        <div class="arch-node-detail">SQL Parser → Planner → Executor</div>
+      </div>
+    </div>
+
+    <div class="arch-arrow-split">
+      <span>▼ hash(key) % shard_count</span>
+    </div>
+
+    <!-- Shard Layer -->
+    <div class="arch-layer arch-shards">
+      <div class="arch-node shard">
+        <div class="arch-node-label">Shard 0</div>
+        <div class="arch-node-detail">Single-writer actor</div>
+      </div>
+      <div class="arch-node shard">
+        <div class="arch-node-label">Shard 1</div>
+        <div class="arch-node-detail">Single-writer actor</div>
+      </div>
+      <div class="arch-node shard">
+        <div class="arch-node-label">Shard 2</div>
+        <div class="arch-node-detail">Single-writer actor</div>
+      </div>
+      <div class="arch-node shard">
+        <div class="arch-node-label">Shard 3</div>
+        <div class="arch-node-detail">Single-writer actor</div>
+      </div>
+    </div>
+
+    <div class="arch-arrow">▼</div>
+
+    <!-- Write Path -->
+    <div class="arch-layer arch-write-path">
+      <div class="arch-path-label">Write Path</div>
+      <div class="arch-pipeline">
+        <div class="arch-node wal">
+          <div class="arch-node-label">WAL</div>
+          <div class="arch-node-detail">CRC-framed, fsync</div>
+        </div>
+        <div class="arch-pipe">→</div>
+        <div class="arch-node memtable">
+          <div class="arch-node-label">Memtable</div>
+          <div class="arch-node-detail">Skip list, 4MB</div>
+        </div>
+        <div class="arch-pipe">→</div>
+        <div class="arch-node flush">
+          <div class="arch-node-label">Flush</div>
+          <div class="arch-node-detail">SSTable L0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arch-arrow">▼</div>
+
+    <!-- Storage Levels -->
+    <div class="arch-layer arch-storage">
+      <div class="arch-path-label">LSM Storage</div>
+      <div class="arch-levels">
+        <div class="arch-level l0">
+          <span class="arch-level-label">L0</span>
+          <div class="arch-level-bar"></div>
+        </div>
+        <div class="arch-level l1">
+          <span class="arch-level-label">L1</span>
+          <div class="arch-level-bar"></div>
+        </div>
+        <div class="arch-level l2">
+          <span class="arch-level-label">L2</span>
+          <div class="arch-level-bar"></div>
+        </div>
+        <div class="arch-level l3">
+          <span class="arch-level-label">L3</span>
+          <div class="arch-level-bar"></div>
+        </div>
+      </div>
+      <div class="arch-compaction-label">← Compaction merges levels →</div>
+    </div>
+
+    <!-- Read Path (side) -->
+    <div class="arch-layer arch-read-path">
+      <div class="arch-path-label">Read Path</div>
+      <div class="arch-pipeline">
+        <div class="arch-node cache-node">
+          <div class="arch-node-label">Cache</div>
+          <div class="arch-node-detail">Block + Index LRU</div>
+        </div>
+        <div class="arch-pipe">→</div>
+        <div class="arch-node bloom-node">
+          <div class="arch-node-label">Bloom Filter</div>
+          <div class="arch-node-detail">10 bits/key</div>
+        </div>
+        <div class="arch-pipe">→</div>
+        <div class="arch-node temporal-node">
+          <div class="arch-node-label">Temporal Filter</div>
+          <div class="arch-node-detail">AS OF / VALID AT</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI Layer -->
+    <div class="arch-layer arch-ai">
+      <div class="arch-path-label">AI Runtime (Tier-0)</div>
+      <div class="arch-pipeline">
+        <div class="arch-node ai-node">
+          <div class="arch-node-label">Risk Scoring</div>
+          <div class="arch-node-detail">Inline, per-write</div>
+        </div>
+        <div class="arch-node ai-node">
+          <div class="arch-node-label">Insights</div>
+          <div class="arch-node-detail">Batched synthesis</div>
+        </div>
+        <div class="arch-node ai-node">
+          <div class="arch-node-label">Advisors</div>
+          <div class="arch-node-detail">Query, Cache, Compaction</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .arch-diagram {
+    background: #0F172A;
+    border-radius: 12px;
+    padding: 2rem;
+    border: 1px solid var(--spectra-card-border);
+    overflow-x: auto;
+  }
+  .arch-title {
+    text-align: center;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--sl-color-white);
+    margin-bottom: 2rem;
+  }
+  .arch-flow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .arch-layer {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .arch-node {
+    background: var(--spectra-card-bg);
+    border: 1px solid var(--spectra-card-border);
+    border-radius: 10px;
+    padding: 0.8rem 1.2rem;
+    text-align: center;
+    min-width: 120px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .arch-node:hover {
+    border-color: var(--spectra-blue);
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.2);
+  }
+  .arch-node-icon {
+    font-size: 1.5rem;
+    margin-bottom: 0.3rem;
+  }
+  .arch-node-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--sl-color-white);
+  }
+  .arch-node-detail {
+    font-size: 0.75rem;
+    color: var(--sl-color-gray-3);
+    margin-top: 0.2rem;
+  }
+  .arch-node.client { border-color: var(--spectra-blue); }
+  .arch-node.database { border-color: var(--spectra-violet); }
+  .arch-node.shard { border-color: var(--spectra-emerald); }
+  .arch-node.wal, .arch-node.memtable, .arch-node.flush {
+    border-color: var(--spectra-amber);
+  }
+  .arch-node.cache-node, .arch-node.bloom-node, .arch-node.temporal-node {
+    border-color: var(--spectra-blue);
+  }
+  .arch-node.ai-node { border-color: var(--spectra-violet); }
+
+  .arch-arrow, .arch-arrow-split {
+    color: var(--sl-color-gray-4);
+    font-size: 1.2rem;
+    padding: 0.2rem 0;
+  }
+  .arch-arrow-split span {
+    font-size: 0.8rem;
+    color: var(--sl-color-gray-3);
+  }
+  .arch-shards {
+    display: flex;
+    gap: 0.75rem;
+  }
+  .arch-pipeline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .arch-pipe {
+    color: var(--sl-color-gray-4);
+    font-size: 1.2rem;
+  }
+  .arch-path-label {
+    width: 100%;
+    text-align: center;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--spectra-blue);
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .arch-write-path, .arch-read-path, .arch-storage, .arch-ai {
+    background: rgba(255,255,255,0.02);
+    border-radius: 10px;
+    padding: 1rem;
+    border: 1px dashed var(--spectra-card-border);
+    flex-direction: column;
+  }
+  .arch-levels {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    max-width: 500px;
+    margin: 0 auto;
+    width: 100%;
+  }
+  .arch-level {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .arch-level-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--sl-color-gray-3);
+    width: 24px;
+  }
+  .arch-level-bar {
+    height: 16px;
+    border-radius: 4px;
+    background: var(--spectra-gradient);
+    opacity: 0.6;
+  }
+  .l0 .arch-level-bar { width: 15%; }
+  .l1 .arch-level-bar { width: 30%; }
+  .l2 .arch-level-bar { width: 60%; }
+  .l3 .arch-level-bar { width: 100%; }
+
+  .arch-compaction-label {
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--sl-color-gray-4);
+    margin-top: 0.5rem;
+    font-style: italic;
+  }
+
+  @media (max-width: 640px) {
+    .arch-shards { flex-direction: column; align-items: center; }
+    .arch-pipeline { flex-direction: column; }
+    .arch-pipe { transform: rotate(90deg); }
+  }
+</style>

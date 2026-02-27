@@ -1,0 +1,76 @@
+---
+draft: false
+head: []
+title: MVCC & Snapshot Isolation
+description: How SpectraDB provides multi-version concurrency control with snapshot reads.
+---
+
+SpectraDB provides **MVCC (Multi-Version Concurrency Control)** through its append-only architecture. Since data is never overwritten, multiple versions of every key coexist naturally.
+
+## How MVCC Works
+
+Every write assigns a monotonically increasing `commit_ts` per shard:
+
+```
+Key: "user/alice"
+  commit_ts=1: { name: "Alice", role: "user" }
+  commit_ts=5: { name: "Alice", role: "admin" }
+  commit_ts=9: { name: "Alice Chen", role: "admin" }
+```
+
+All three versions are permanently stored. The read path selects which version to return based on the query's temporal context.
+
+## Snapshot Reads
+
+A snapshot read sees a consistent view of the database at a specific commit timestamp:
+
+```sql
+-- Read the latest state
+SELECT * FROM users WHERE id = 'alice';
+-- Returns: commit_ts=9 version
+
+-- Read as of commit 5
+SELECT * FROM users WHERE id = 'alice' AS OF 5;
+-- Returns: commit_ts=5 version
+
+-- Read as of commit 3
+SELECT * FROM users WHERE id = 'alice' AS OF 3;
+-- Returns: commit_ts=1 version (latest at that point)
+```
+
+## Isolation Guarantees
+
+| Property | Guarantee |
+|----------|-----------|
+| Read consistency | Snapshot reads are always consistent — no torn reads |
+| Write ordering | Commit timestamps are monotonic within each shard |
+| No write conflicts | Append-only — concurrent writes never conflict |
+| No read locks | Reads never block writes; writes never block reads |
+
+## Comparison with Traditional MVCC
+
+| Feature | SpectraDB | Traditional (PostgreSQL) |
+|---------|-----------|------------------------|
+| Version storage | Permanent (ledger) | Temporary (vacuum cleans old versions) |
+| Write mechanism | Append-only | In-place update with undo log |
+| Read locks | None | Shared locks or snapshot isolation |
+| Version limit | Unlimited (all history) | Limited by vacuum policy |
+| Space reclamation | None needed (versions are features) | Required (VACUUM) |
+
+## Commit Timestamps
+
+Each shard maintains an independent, monotonically increasing commit counter:
+
+```
+Shard 0: commit_ts = 1, 2, 3, 4, ...
+Shard 1: commit_ts = 1, 2, 3, 4, ...
+Shard 2: commit_ts = 1, 2, 3, 4, ...
+```
+
+:::note
+Commit timestamps are **shard-local**, not globally ordered. Cross-shard ordering requires application-level coordination.
+:::
+
+## Version Preservation
+
+Unlike traditional databases, SpectraDB **never drops versions** during compaction. All temporal versions are preserved permanently. This is a fundamental design choice — history is a feature, not overhead.

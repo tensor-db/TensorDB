@@ -1,0 +1,56 @@
+---
+draft: false
+head: []
+title: Change Feeds
+description: Real-time event streaming from SpectraDB write operations.
+---
+
+Change feeds provide a real-time stream of write events from the database.
+
+## Subscribing
+
+```rust
+let mut feed = db.subscribe()?;
+
+// Process events as they arrive
+while let Some(event) = feed.next() {
+    match event {
+        ChangeEvent::Put { key, value, commit_ts } => {
+            println!("Write: {} = {:?} at ts={}", key, value, commit_ts);
+        }
+        ChangeEvent::Delete { key, commit_ts } => {
+            println!("Delete: {} at ts={}", key, commit_ts);
+        }
+    }
+}
+```
+
+## Filtering
+
+Filter change feeds by key prefix:
+
+```rust
+let mut feed = db.subscribe_prefix("orders/")?;
+// Only receives events for keys starting with "orders/"
+```
+
+## Use Cases
+
+- **Materialized views**: Keep derived data up to date
+- **Replication**: Stream changes to a secondary system
+- **Event processing**: Trigger business logic on data changes
+- **Audit logging**: Record all mutations for compliance
+
+## AI Isolation
+
+AI-generated data (under `__ai/` prefix) is **excluded** from change feeds. Subscribers only see user-written data.
+
+## Impact on Write Path
+
+When subscribers are active, the write path falls back from the fast path to the channel path to ensure event delivery. This adds ~160µs per write.
+
+```rust
+// has_subscribers flag is set eagerly when:
+// 1. db.subscribe() is called
+// 2. AI auto-insights are enabled (internal subscriber)
+```

@@ -1,0 +1,63 @@
+---
+draft: false
+head: []
+title: Error Reference
+description: SpectraDB error types and handling.
+---
+
+SpectraDB uses the `SpectraError` enum for all error conditions.
+
+## Error Types
+
+```rust
+pub enum SpectraError {
+    /// I/O errors (disk, WAL, SSTable)
+    Io(std::io::Error),
+
+    /// Configuration validation failure
+    Config(String),
+
+    /// SQL parsing or execution error
+    Sql(String),
+
+    /// Key not found
+    NotFound(String),
+
+    /// Serialization/deserialization error
+    Serde(String),
+
+    /// Internal engine error
+    Internal(String),
+}
+```
+
+## Handling Errors
+
+```rust
+use spectradb::{Database, Config, SpectraError};
+
+match db.sql("SELECT * FROM nonexistent", &[]) {
+    Ok(results) => println!("{:?}", results),
+    Err(SpectraError::Sql(msg)) => eprintln!("SQL error: {}", msg),
+    Err(SpectraError::Io(e)) => eprintln!("I/O error: {}", e),
+    Err(e) => eprintln!("Other error: {}", e),
+}
+```
+
+## Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|---------|
+| `Config("memtable_max_bytes must be >= 1024")` | Invalid config | Fix the configuration value |
+| `Sql("table 'x' not found")` | Missing table | CREATE TABLE first |
+| `Sql("parse error")` | SQL syntax error | Check SQL syntax |
+| `Io("Permission denied")` | File permissions | Check data directory permissions |
+| `Io("No space left on device")` | Disk full | Free disk space |
+
+## Result Type
+
+```rust
+pub type Result<T> = std::result::Result<T, SpectraError>;
+```
+
+All SpectraDB functions return `spectradb::Result<T>`, which is an alias for `std::result::Result<T, SpectraError>`.

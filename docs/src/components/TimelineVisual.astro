@@ -1,0 +1,284 @@
+---
+// Bitemporal timeline visualization
+// Shows two timelines (system time and business time) with fact events and query range highlights
+---
+
+<div class="timeline-container">
+  <div class="timeline-title">Bitemporal Data Model</div>
+  <div class="timeline-explanation">
+    Every fact in SpectraDB lives in two time dimensions: <strong>system time</strong> (when it was recorded)
+    and <strong>business time</strong> (when it was true in the real world).
+  </div>
+
+  <div class="timeline-diagram">
+    <!-- System Time Axis -->
+    <div class="timeline-section">
+      <div class="timeline-axis-title">System Time (commit_ts)</div>
+      <div class="timeline-axis">
+        <div class="timeline-track">
+          <div class="timeline-event" style="left: 10%">
+            <div class="timeline-dot"></div>
+            <div class="timeline-event-label">v1 written<br/><small>ts=100</small></div>
+          </div>
+          <div class="timeline-event" style="left: 35%">
+            <div class="timeline-dot"></div>
+            <div class="timeline-event-label">v2 correction<br/><small>ts=200</small></div>
+          </div>
+          <div class="timeline-event" style="left: 60%">
+            <div class="timeline-dot"></div>
+            <div class="timeline-event-label">v3 update<br/><small>ts=350</small></div>
+          </div>
+          <div class="timeline-event" style="left: 85%">
+            <div class="timeline-dot"></div>
+            <div class="timeline-event-label">v4 latest<br/><small>ts=500</small></div>
+          </div>
+
+          <!-- AS OF query range -->
+          <div class="timeline-query-highlight" style="left: 0; width: 42%">
+            <div class="timeline-query-label">AS OF 250</div>
+          </div>
+        </div>
+        <div class="timeline-axis-labels">
+          <span>ts=0</span>
+          <span>ts=250</span>
+          <span>ts=500</span>
+        </div>
+      </div>
+      <div class="timeline-note">
+        <code>AS OF 250</code> returns v2 — the latest version visible at commit timestamp 250.
+      </div>
+    </div>
+
+    <!-- Business Time Axis -->
+    <div class="timeline-section">
+      <div class="timeline-axis-title">Business Time (valid_from → valid_to)</div>
+      <div class="timeline-axis">
+        <div class="timeline-track">
+          <!-- Business time ranges as bars -->
+          <div class="timeline-range" style="left: 5%; width: 30%">
+            <div class="timeline-range-bar rate1"></div>
+            <div class="timeline-range-label">Rate 3.5%<br/><small>Jan–Mar 2024</small></div>
+          </div>
+          <div class="timeline-range" style="left: 35%; width: 25%">
+            <div class="timeline-range-bar rate2"></div>
+            <div class="timeline-range-label">Rate 4.0%<br/><small>Apr–Jun 2024</small></div>
+          </div>
+          <div class="timeline-range" style="left: 60%; width: 35%">
+            <div class="timeline-range-bar rate3"></div>
+            <div class="timeline-range-label">Rate 4.25%<br/><small>Jul–Dec 2024</small></div>
+          </div>
+
+          <!-- VALID AT marker -->
+          <div class="timeline-valid-marker" style="left: 50%">
+            <div class="timeline-valid-line"></div>
+            <div class="timeline-valid-label">VALID AT May 2024</div>
+          </div>
+        </div>
+        <div class="timeline-axis-labels">
+          <span>Jan 2024</span>
+          <span>Jul 2024</span>
+          <span>Dec 2024</span>
+        </div>
+      </div>
+      <div class="timeline-note">
+        <code>VALID AT 1715000000</code> (May 2024) returns Rate 4.0% — the fact valid at that business time.
+      </div>
+    </div>
+  </div>
+
+  <div class="timeline-combined">
+    <div class="timeline-combined-title">Combined: AS OF + VALID AT</div>
+    <div class="timeline-combined-desc">
+      Combine both dimensions: <code>SELECT rate FROM policies AS OF 200 VALID AT 1715000000</code>
+      <br/>
+      This returns the rate that <em>was known at system time 200</em> and <em>was valid in May 2024</em>.
+    </div>
+  </div>
+</div>
+
+<style>
+  .timeline-container {
+    padding: 1.5rem 0;
+  }
+  .timeline-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--sl-color-white);
+    margin-bottom: 0.5rem;
+  }
+  .timeline-explanation {
+    font-size: 0.95rem;
+    color: var(--sl-color-gray-3);
+    line-height: 1.6;
+    margin-bottom: 2rem;
+  }
+  .timeline-explanation strong {
+    color: var(--spectra-blue);
+  }
+  .timeline-diagram {
+    display: flex;
+    flex-direction: column;
+    gap: 2.5rem;
+  }
+  .timeline-section {
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--spectra-card-border);
+    border-radius: 12px;
+    padding: 1.5rem;
+  }
+  .timeline-axis-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--spectra-violet);
+    margin-bottom: 1.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .timeline-axis {
+    position: relative;
+  }
+  .timeline-track {
+    position: relative;
+    height: 80px;
+    background: linear-gradient(90deg, var(--spectra-card-border), var(--spectra-card-border));
+    background-size: 100% 2px;
+    background-repeat: no-repeat;
+    background-position: center;
+  }
+  .timeline-event {
+    position: absolute;
+    top: 50%;
+    transform: translateX(-50%) translateY(-50%);
+    text-align: center;
+  }
+  .timeline-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--spectra-gradient);
+    margin: 0 auto;
+    animation: pulse-dot 2s ease-in-out infinite;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+  }
+  @keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
+  }
+  .timeline-event-label {
+    font-size: 0.7rem;
+    color: var(--sl-color-gray-3);
+    margin-top: 0.5rem;
+    white-space: nowrap;
+  }
+  .timeline-event-label small {
+    color: var(--sl-color-gray-4);
+  }
+  .timeline-query-highlight {
+    position: absolute;
+    top: -8px;
+    height: calc(100% + 16px);
+    background: rgba(59, 130, 246, 0.08);
+    border-right: 2px dashed var(--spectra-blue);
+    border-radius: 4px;
+  }
+  .timeline-query-label {
+    position: absolute;
+    top: -20px;
+    right: -8px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--spectra-blue);
+    white-space: nowrap;
+  }
+  .timeline-axis-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 0.5rem;
+    font-size: 0.7rem;
+    color: var(--sl-color-gray-4);
+  }
+  .timeline-range {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    text-align: center;
+  }
+  .timeline-range-bar {
+    height: 24px;
+    border-radius: 6px;
+    opacity: 0.8;
+  }
+  .timeline-range-bar.rate1 { background: var(--spectra-blue); }
+  .timeline-range-bar.rate2 { background: var(--spectra-violet); }
+  .timeline-range-bar.rate3 { background: var(--spectra-emerald); }
+  .timeline-range-label {
+    font-size: 0.7rem;
+    color: var(--sl-color-gray-3);
+    margin-top: 0.3rem;
+  }
+  .timeline-range-label small {
+    color: var(--sl-color-gray-4);
+  }
+  .timeline-valid-marker {
+    position: absolute;
+    top: -12px;
+    height: calc(100% + 24px);
+    transform: translateX(-50%);
+  }
+  .timeline-valid-line {
+    width: 2px;
+    height: 100%;
+    background: var(--spectra-amber);
+    margin: 0 auto;
+  }
+  .timeline-valid-label {
+    position: absolute;
+    top: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--spectra-amber);
+    white-space: nowrap;
+  }
+  .timeline-note {
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-3);
+    line-height: 1.5;
+    padding: 0.75rem;
+    background: rgba(59, 130, 246, 0.05);
+    border-radius: 8px;
+    border-left: 3px solid var(--spectra-blue);
+  }
+  .timeline-note code {
+    color: var(--spectra-blue);
+    font-weight: 600;
+  }
+  .timeline-combined {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: rgba(139, 92, 246, 0.05);
+    border: 1px solid rgba(139, 92, 246, 0.2);
+    border-radius: 12px;
+  }
+  .timeline-combined-title {
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--spectra-violet);
+    margin-bottom: 0.5rem;
+  }
+  .timeline-combined-desc {
+    font-size: 0.9rem;
+    color: var(--sl-color-gray-3);
+    line-height: 1.6;
+  }
+  .timeline-combined-desc code {
+    font-size: 0.85rem;
+    color: var(--spectra-blue);
+  }
+  @media (max-width: 640px) {
+    .timeline-event-label { font-size: 0.6rem; }
+    .timeline-range-label { font-size: 0.6rem; }
+  }
+</style>

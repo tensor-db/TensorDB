@@ -1,0 +1,85 @@
+---
+draft: false
+head: []
+title: Benchmarks
+description: SpectraDB performance benchmarks vs SQLite, sled, and redb.
+---
+
+import PerformanceChart from '../../../components/PerformanceChart.astro';
+
+## Results
+
+<PerformanceChart />
+
+## Detailed Numbers
+
+### Point Read Latency
+
+| Engine | P50 | P99 | Notes |
+|--------|-----|-----|-------|
+| **SpectraDB** | **276ns** | **450ns** | Direct ShardReadHandle, bloom + cache |
+| sled | 244ns | 380ns | B-tree, memory-mapped |
+| redb | 573ns | 890ns | B-tree, copy-on-write |
+| SQLite | 1,080ns | 2,100ns | B-tree, WAL mode |
+
+### Point Write Latency
+
+| Engine | P50 | P99 | Notes |
+|--------|-----|-----|-------|
+| **SpectraDB** | **1.9µs** | **4.2µs** | Fast write path, group WAL |
+| sled | 9.2µs | 18µs | Write-ahead log |
+| redb | 18.4µs | 35µs | Copy-on-write B-tree |
+| SQLite | 38.6µs | 72µs | WAL mode, fsync per write |
+
+### Prefix Scan (100 keys)
+
+| Engine | Latency | Notes |
+|--------|---------|-------|
+| sled | 38µs | B-tree range scan |
+| **SpectraDB** | **45µs** | LSM multi-level merge |
+| redb | 89µs | B-tree range scan |
+| SQLite | 156µs | B-tree + SQLite overhead |
+
+### Mixed Workload (80% read, 20% write)
+
+| Engine | Avg Latency | Notes |
+|--------|------------|-------|
+| **SpectraDB** | **2.1µs** | Fast path for both reads and writes |
+| sled | 4.8µs | Memory-mapped reads |
+| redb | 7.2µs | Copy-on-write overhead |
+| SQLite | 12.4µs | Lock contention |
+
+## Methodology
+
+- **Platform**: Linux x86_64
+- **Dataset**: 1M pre-loaded keys
+- **Workload**: Single-threaded, sequential
+- **Measurements**: 10K iterations, warm cache
+- **SQLite**: WAL mode, default settings
+- **SpectraDB**: Default config (4 shards, fast write enabled)
+
+## Why SpectraDB is Fast
+
+### Read Path
+- **Direct ShardReadHandle**: Bypasses actor channel (saves ~100ns)
+- **Bloom filters**: Skip SSTables with 99% accuracy
+- **Block cache**: 32MB LRU cache keeps hot data in memory
+- **Prefix compression**: Reduces data size for faster scans
+
+### Write Path
+- **Fast write path**: Atomic operations instead of channel messaging
+- **Group WAL**: Batched fdatasync reduces syscall overhead
+- **Skip list memtable**: O(log n) concurrent inserts
+
+## Running Benchmarks
+
+```bash
+# Basic benchmarks
+cargo bench --bench basic
+
+# Multi-engine comparative benchmarks
+cargo bench --bench comparative
+
+# Full overnight benchmark suite
+./scripts/overnight_bench.sh
+```

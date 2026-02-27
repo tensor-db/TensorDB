@@ -1,0 +1,35 @@
+---
+draft: false
+head: []
+title: Query Advisor
+description: Access pattern analysis and read annotations in SpectraDB.
+---
+
+When `ai_annotate_reads` is enabled, the query advisor analyzes access patterns and annotates read results.
+
+## Features
+
+- **Access frequency tracking**: Monitors which keys are read most often
+- **Staleness detection**: Identifies data that hasn't been updated recently
+- **Hot/cold classification**: Labels keys as hot (frequently accessed) or cold
+
+## Access Statistics
+
+The AI runtime maintains a fixed-size access stats buffer:
+
+```rust
+config.ai_access_stats_size = 4096;  // Track up to 4096 keys
+```
+
+Statistics tracked per key:
+- Read count
+- Last read timestamp
+- Last write timestamp
+- Average read interval
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `ai_annotate_reads` | `false` | Enable read annotations |
+| `ai_access_stats_size` | `1024` | Access stats buffer size |

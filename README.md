@@ -858,8 +858,16 @@ spectradb/
 
 ## Documentation
 
+**[Interactive Documentation Site](docs/)** — Full documentation with live SQL playground, animated architecture diagrams, performance comparisons, and interactive configuration explorer.
+
+```bash
+cd docs && npm install && npm run dev
+# Opens at http://localhost:4321
+```
+
 | Document | Description |
 |----------|-------------|
+| [docs/](docs/) | Interactive documentation site (Starlight/Astro) |
 | [design.md](design.md) | Internal architecture, data model, storage format |
 | [perf.md](perf.md) | Tuning knobs, benchmark methodology, optimization roadmap |
 | [TEST_PLAN.md](TEST_PLAN.md) | Correctness, recovery, temporal, and soak test strategy |

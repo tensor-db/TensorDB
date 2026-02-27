@@ -1,0 +1,52 @@
+---
+draft: false
+head: []
+title: Write-Ahead Log (WAL)
+description: SpectraDB's crash-safe WAL with CRC framing and configurable fsync.
+---
+
+The Write-Ahead Log (WAL) is the first point of persistence for every write. No write is acknowledged until it's been appended to the WAL.
+
+## Structure
+
+Each WAL record contains:
+
+| Field | Size | Description |
+|-------|------|-------------|
+| CRC32 | 4 bytes | Checksum of the payload |
+| Length | 4 bytes | Payload length in bytes |
+| Key | variable | The user key |
+| Commit TS | 8 bytes | System timestamp |
+| Valid From | 8 bytes | Business time start |
+| Valid To | 8 bytes | Business time end |
+| Payload | variable | Serialized value |
+
+## Durability
+
+### Per-Shard WAL (Channel Path)
+
+Each shard maintains its own WAL file. Fsync frequency is controlled by `wal_fsync_every_n_records` (default: 128).
+
+### Group WAL (Fast Write Path)
+
+The `DurabilityThread` batches WAL writes across all shards:
+
+- Writes are collected during a batch interval (`fast_write_wal_batch_interval_us`, default: 1000µs)
+- One `fdatasync` call flushes the entire batch
+- Reduces syscall overhead for high-throughput workloads
+
+## Crash Recovery
+
+On startup, SpectraDB replays each shard's WAL from the last checkpoint:
+
+1. Read WAL records sequentially
+2. Verify CRC for each record
+3. Replay valid records into the memtable
+4. Discard records with CRC mismatches (partial writes from crash)
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `wal_fsync_every_n_records` | 128 | Fsync frequency for channel-path WAL |
+| `fast_write_wal_batch_interval_us` | 1000 | Batch window for group WAL |

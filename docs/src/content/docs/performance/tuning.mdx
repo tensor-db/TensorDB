@@ -1,0 +1,124 @@
+---
+draft: false
+head: []
+title: Performance Tuning
+description: Guide to tuning SpectraDB for optimal performance across different workloads.
+---
+
+## Identify Your Workload
+
+| Workload | Characteristics | Primary Tuning Focus |
+|----------|----------------|---------------------|
+| OLTP (read-heavy) | Many point reads, few writes | Cache sizes, bloom filters |
+| OLTP (write-heavy) | High write throughput, fewer reads | Memtable size, shard count, WAL batching |
+| Mixed | Both reads and writes | Balanced configuration |
+| Analytical | Large scans, aggregations | Block size, compaction |
+| Time-series | Append-only, temporal queries | Write batching, compaction thresholds |
+
+## Read Optimization
+
+### Increase Cache Sizes
+
+```rust
+config.block_cache_bytes = 128 * 1024 * 1024;  // 128MB
+config.index_cache_entries = 4096;
+```
+
+Monitor with `EXPLAIN ANALYZE` — if `cache_hits` is low, increase cache.
+
+### Optimize Bloom Filters
+
+```rust
+config.bloom_bits_per_key = 14;  // ~0.2% false positive rate
+```
+
+Higher bits per key reduces false positives but increases memory usage.
+
+### Reduce Read Amplification
+
+```rust
+config.compaction_l0_threshold = 4;  // Compact L0 sooner
+```
+
+Fewer L0 files means fewer files to check on reads.
+
+## Write Optimization
+
+### Enable Fast Write Path
+
+```rust
+config.fast_write_enabled = true;  // Default
+```
+
+### Increase Batch Window
+
+```rust
+config.fast_write_wal_batch_interval_us = 2000;  // 2ms batch
+```
+
+Larger batch windows amortize fsync cost across more writes.
+
+### Larger Memtable
+
+```rust
+config.memtable_max_bytes = 16 * 1024 * 1024;  // 16MB
+```
+
+Fewer flushes mean less write amplification.
+
+### More Shards
+
+```rust
+config.shard_count = 8;  // More parallelism
+```
+
+## Monitoring
+
+### EXPLAIN ANALYZE
+
+```sql
+EXPLAIN ANALYZE SELECT * FROM users WHERE id = 'u1';
+```
+
+Key metrics:
+- `execution_time_us`: Total query time
+- `cache_hits`: Block cache hit count
+- `bloom_filter_hits`: Bloom filter positive count
+- `rows_returned`: Result set size
+
+### AI Advisors
+
+Enable AI advisors for automated tuning suggestions:
+
+```rust
+config.ai_compaction_advisor = true;
+config.ai_cache_advisor = true;
+```
+
+## Common Tuning Scenarios
+
+### Slow Point Reads
+
+1. Check `bloom_filter_hits` — increase `bloom_bits_per_key` if high
+2. Check `cache_hits` — increase `block_cache_bytes` if low
+3. Check L0 file count — reduce `compaction_l0_threshold` if high
+
+### Slow Writes
+
+1. Verify fast write path is enabled
+2. Increase `fast_write_wal_batch_interval_us`
+3. Increase `memtable_max_bytes` to reduce flush frequency
+4. Increase `shard_count` for more parallelism
+
+### High Memory Usage
+
+1. Reduce `block_cache_bytes`
+2. Reduce `memtable_max_bytes`
+3. Reduce `index_cache_entries`
+4. Reduce `bloom_bits_per_key` to minimum (4)
+
+### High Disk Usage
+
+1. LZ4 compression reduces on-disk size by ~2x
+2. Adjust `compaction_size_ratio` for more aggressive compaction
+3. Review data retention policies

@@ -1,0 +1,47 @@
+---
+draft: false
+head: []
+title: Auto Insights
+description: Automatic pattern synthesis from write streams in SpectraDB.
+---
+
+When `ai_auto_insights` is enabled, SpectraDB's AI runtime analyzes write patterns and generates insights automatically.
+
+## How It Works
+
+1. **Event collection**: Writes are batched into event windows
+2. **Batch processing**: When the batch window expires or reaches max events, the batch is processed
+3. **Insight synthesis**: Patterns are detected and insights are generated
+4. **Persistence**: Insights are stored as facts under `__ai/insight/...` keys
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `ai_auto_insights` | `false` | Enable insight synthesis |
+| `ai_batch_window_ms` | `20` | Batch collection window |
+| `ai_batch_max_events` | `16` | Max events per batch |
+
+## Example Insights
+
+The AI runtime can detect patterns like:
+
+- **Write bursts**: Unusual spikes in write frequency
+- **Key hotspots**: Keys receiving disproportionate write traffic
+- **Schema drift**: Changes in value structure over time
+- **Temporal anomalies**: Writes with unusual valid_from/valid_to patterns
+
+## Accessing Insights
+
+Insights are stored as immutable facts and can be queried:
+
+```rust
+let insights = db.scan_prefix("__ai/insight/")?;
+for (key, value) in insights {
+    println!("{}: {:?}", key, value);
+}
+```
+
+## Isolation
+
+Insights are invisible to user change feeds — subscribing to changes only returns user-written data, not AI-generated metadata.

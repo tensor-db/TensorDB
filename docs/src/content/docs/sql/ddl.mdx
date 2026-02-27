@@ -1,0 +1,76 @@
+---
+draft: false
+head: []
+title: DDL — Data Definition
+description: CREATE TABLE, DROP TABLE, and ALTER TABLE statements in SpectraDB.
+---
+
+## CREATE TABLE
+
+```sql
+CREATE TABLE table_name (
+    column1 TYPE,
+    column2 TYPE,
+    ...
+);
+```
+
+### Supported Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `TEXT` | UTF-8 string | `'hello'` |
+| `INTEGER` | 64-bit signed integer | `42` |
+| `REAL` | 64-bit floating point | `3.14` |
+| `BOOL` | Boolean | `TRUE`, `FALSE` |
+| `BLOB` | Binary data | `X'DEADBEEF'` |
+
+### Examples
+
+```sql
+-- Basic table
+CREATE TABLE users (
+    id TEXT,
+    name TEXT,
+    email TEXT,
+    age INTEGER
+);
+
+-- Create only if it doesn't exist
+CREATE TABLE IF NOT EXISTS events (
+    id TEXT,
+    type TEXT,
+    payload TEXT,
+    timestamp INTEGER
+);
+```
+
+:::note
+SpectraDB tables don't have traditional PRIMARY KEY constraints. The first column is conventionally used as the row identifier for key encoding (`table/<name>/<pk_value>`).
+:::
+
+## DROP TABLE
+
+```sql
+DROP TABLE table_name;
+DROP TABLE IF EXISTS table_name;
+```
+
+Dropping a table removes its metadata from `__meta/table/<name>`. Row data becomes orphaned but doesn't affect the ledger's integrity.
+
+## ALTER TABLE
+
+```sql
+-- Add a column
+ALTER TABLE users ADD COLUMN phone TEXT;
+
+-- Drop a column
+ALTER TABLE users DROP COLUMN phone;
+
+-- Rename a column
+ALTER TABLE users RENAME COLUMN email TO email_address;
+```
+
+:::caution
+ALTER TABLE operations modify the table metadata. Existing rows are not rewritten — new columns on existing rows return NULL.
+:::

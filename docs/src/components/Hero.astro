@@ -1,0 +1,95 @@
+---
+// No props needed - self-contained hero
+---
+
+<section class="hero-section">
+  <div class="hero-content">
+    <div class="hero-badge">
+      <span class="badge">Open Source</span>
+      <span class="badge">Rust-Powered</span>
+      <span class="badge emerald">v0.28</span>
+    </div>
+    <h1 class="hero-tagline">The AI-Native<br/>Bitemporal Ledger Database</h1>
+    <p class="hero-subtitle">
+      Append-only immutable storage with MVCC snapshot reads, SQL query surface,
+      LSM-tree engine, and embedded AI runtime. Every write is a fact. Every fact has a timeline.
+    </p>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <span class="hero-stat-number">276ns</span>
+        <span class="hero-stat-label">Point Reads</span>
+      </div>
+      <div class="hero-stat">
+        <span class="hero-stat-number">1.9µs</span>
+        <span class="hero-stat-label">Point Writes</span>
+      </div>
+      <div class="hero-stat">
+        <span class="hero-stat-number">4×</span>
+        <span class="hero-stat-label">Faster than SQLite reads</span>
+      </div>
+      <div class="hero-stat">
+        <span class="hero-stat-number">20×</span>
+        <span class="hero-stat-label">Faster than SQLite writes</span>
+      </div>
+    </div>
+    <div class="hero-cta">
+      <a href="/getting-started/quickstart/" class="hero-btn primary">Get Started</a>
+      <a href="/sql/" class="hero-btn secondary">SQL Reference</a>
+      <a href="/performance/benchmarks/" class="hero-btn secondary">Benchmarks</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero-content {
+    max-width: 800px;
+    text-align: center;
+    padding: 2rem;
+  }
+  .hero-badge {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+  }
+  .hero-subtitle {
+    font-size: 1.2rem;
+    color: var(--sl-color-gray-3);
+    line-height: 1.7;
+    margin-bottom: 2.5rem;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .hero-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    text-decoration: none;
+    transition: all 0.3s ease;
+  }
+  .hero-btn.primary {
+    background: var(--spectra-gradient);
+    color: white;
+  }
+  .hero-btn.primary:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--spectra-glow);
+  }
+  .hero-btn.secondary {
+    background: var(--spectra-card-bg);
+    color: var(--sl-color-gray-2);
+    border: 1px solid var(--spectra-card-border);
+  }
+  .hero-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-2px);
+  }
+  @media (max-width: 480px) {
+    .hero-subtitle { font-size: 1rem; }
+  }
+</style>

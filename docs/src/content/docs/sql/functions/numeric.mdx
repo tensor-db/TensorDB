@@ -1,0 +1,80 @@
+---
+draft: false
+head: []
+title: Numeric Functions
+description: Mathematical and numeric functions in SpectraDB SQL.
+---
+
+## ABS
+
+```sql
+SELECT ABS(-42);    -- 42
+SELECT ABS(3.14);   -- 3.14
+```
+
+## ROUND
+
+```sql
+SELECT ROUND(3.14159);      -- 3.0
+SELECT ROUND(3.14159, 2);   -- 3.14
+```
+
+## CEIL / FLOOR
+
+```sql
+SELECT CEIL(3.2);    -- 4
+SELECT FLOOR(3.8);   -- 3
+```
+
+## MOD
+
+```sql
+SELECT MOD(10, 3);   -- 1
+SELECT 10 % 3;       -- 1
+```
+
+## POWER / SQRT
+
+```sql
+SELECT POWER(2, 10);   -- 1024
+SELECT SQRT(144);       -- 12.0
+```
+
+## LOG / LN / LOG10
+
+```sql
+SELECT LN(2.718281828);    -- ~1.0
+SELECT LOG10(1000);         -- 3.0
+```
+
+## SIGN
+
+```sql
+SELECT SIGN(-5);   -- -1
+SELECT SIGN(0);    -- 0
+SELECT SIGN(5);    -- 1
+```
+
+## MIN / MAX (scalar)
+
+```sql
+SELECT MIN(3, 7, 1, 9);   -- 1
+SELECT MAX(3, 7, 1, 9);   -- 9
+```
+
+## RANDOM
+
+```sql
+SELECT RANDOM();   -- Random integer
+```
+
+## Arithmetic Operators
+
+```sql
+SELECT 10 + 3;    -- 13
+SELECT 10 - 3;    -- 7
+SELECT 10 * 3;    -- 30
+SELECT 10 / 3;    -- 3 (integer division)
+SELECT 10.0 / 3;  -- 3.333...
+SELECT 10 % 3;    -- 1
+```

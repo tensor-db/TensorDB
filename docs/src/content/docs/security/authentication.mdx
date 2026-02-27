@@ -1,0 +1,44 @@
+---
+draft: false
+head: []
+title: Authentication
+description: Authentication mechanisms for SpectraDB access control.
+---
+
+:::note[Roadmap Feature]
+Authentication is planned for a future release. Current SpectraDB is an embedded database with no built-in authentication layer.
+:::
+
+## Current State
+
+As an embedded database, SpectraDB runs within your application process. Access control is managed at the application level.
+
+## Planned Authentication
+
+### API Key Authentication
+
+```rust
+let config = Config::default();
+config.auth_enabled = true;
+config.auth_api_keys = vec![
+    ApiKey { key: "sk_prod_...", role: Role::Admin },
+    ApiKey { key: "sk_read_...", role: Role::ReadOnly },
+];
+let db = Database::open("data", config)?;
+```
+
+### Token-Based Authentication
+
+For network-accessible deployments:
+- JWT token validation
+- Token expiration and refresh
+- Scope-based permissions
+
+## Security Best Practices (Current)
+
+Even without built-in authentication:
+
+- **File permissions**: Restrict access to the data directory
+- **Encryption at rest**: Use filesystem-level encryption (LUKS, FileVault)
+- **Network isolation**: Don't expose the database directory over the network
+- **Application-level auth**: Validate users in your application before database calls

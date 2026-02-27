@@ -1,0 +1,45 @@
+---
+draft: false
+head: []
+title: Bloom Filters
+description: Probabilistic key filters for fast SSTable skipping in SpectraDB.
+---
+
+Bloom filters are probabilistic data structures that test whether a key **might** be in an SSTable, enabling fast negative lookups.
+
+## How It Works
+
+1. When an SSTable is created, every key is hashed into the bloom filter
+2. On a point lookup, the bloom filter is checked before reading any data blocks
+3. **Negative result**: The key is definitely NOT in this SSTable → skip it
+4. **Positive result**: The key MIGHT be in this SSTable → read the data blocks
+
+## False Positive Rate
+
+With the default 10 bits per key:
+- **False positive rate**: ~1%
+- Memory cost: ~1.25 bytes per key
+
+| Bits per Key | False Positive Rate | Memory per 1M Keys |
+|-------------|--------------------|--------------------|
+| 4 | ~5.6% | 0.5 MB |
+| 8 | ~2.2% | 1.0 MB |
+| 10 | ~1.0% | 1.25 MB |
+| 14 | ~0.2% | 1.75 MB |
+| 20 | ~0.01% | 2.5 MB |
+
+## Impact on Read Performance
+
+Bloom filters are critical for read performance:
+- Without bloom filters: Every SSTable must be checked for every read
+- With bloom filters: ~99% of SSTables are skipped per read
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `bloom_bits_per_key` | 10 | Bits per key (minimum: 4) |
+
+:::tip
+For read-heavy workloads, increase `bloom_bits_per_key` to 14 or higher to reduce false positives.
+:::

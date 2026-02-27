@@ -1,0 +1,56 @@
+---
+draft: false
+head: []
+title: Scaling
+description: Horizontal and vertical scaling strategies for SpectraDB.
+---
+
+:::note[Roadmap Feature]
+Cluster scaling is planned for a future release. Current SpectraDB is single-node.
+:::
+
+## Current: Vertical Scaling
+
+SpectraDB scales vertically through:
+
+- **More shards**: Increase `shard_count` for more write parallelism
+- **More memory**: Larger caches and memtables reduce I/O
+- **Faster storage**: NVMe SSDs minimize read latency
+- **More cores**: Each shard can use its own core
+
+## Planned: Horizontal Scaling
+
+### Shard Distribution
+
+Distribute shards across multiple nodes:
+
+```
+Node 1: Shards 0-3
+Node 2: Shards 4-7
+Node 3: Shards 8-11
+```
+
+### Resharding
+
+When adding nodes, shards can be migrated:
+
+1. Create new shards on the new node
+2. Stream data from source shards
+3. Atomically switch routing
+4. Clean up source shards
+
+### Cross-Node Queries
+
+SQL queries that span multiple shards will be distributed:
+
+```
+Client → Coordinator → Fan-out to shard nodes → Merge results → Response
+```
+
+## Performance Expectations
+
+| Configuration | Point Read | Point Write | Throughput |
+|--------------|-----------|-------------|------------|
+| 1 node, 4 shards | 276ns | 1.9µs | ~500K writes/s |
+| 3 nodes, 12 shards | ~500ns | ~3µs | ~1.5M writes/s |
+| 5 nodes, 20 shards | ~600ns | ~4µs | ~2.5M writes/s |

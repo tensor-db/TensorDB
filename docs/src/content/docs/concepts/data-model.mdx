@@ -1,0 +1,78 @@
+---
+draft: false
+head: []
+title: Data Model
+description: Understanding SpectraDB's immutable fact model — keys, values, commit timestamps, and temporal metadata.
+---
+
+SpectraDB's data model is built on **immutable facts**. There are no UPDATE or DELETE operations that modify existing data — instead, new facts are written that supersede previous ones.
+
+## Facts
+
+Every write to SpectraDB creates a fact with five components:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_key` | `String` | The logical key (e.g., `table/users/u1`) |
+| `commit_ts` | `u64` | System timestamp — when the fact was recorded (monotonically increasing per shard) |
+| `valid_from` | `u64` | Business time — when the fact became valid |
+| `valid_to` | `u64` | Business time — when the fact stops being valid |
+| `payload` | `Value` | The data (String, Integer, Real, Bool, Blob, Null, or composite types) |
+
+## Value Types
+
+```rust
+pub enum Value {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    Real(f64),
+    Text(String),
+    Blob(Vec<u8>),
+    Array(Vec<Value>),      // JSON arrays
+    Object(BTreeMap<String, Value>),  // JSON objects
+    Vector(Vec<f32>),       // Dense vectors for similarity search
+}
+```
+
+## Key Encoding
+
+Keys are encoded with their temporal metadata for efficient storage and retrieval:
+
+```
+[user_key]\x00[commit_ts_be8][valid_from_be8][valid_to_be8]
+```
+
+The `commit_ts` is stored in big-endian format so that keys sort in temporal order within each user key prefix.
+
+## SQL Tables
+
+When you use SQL, SpectraDB maps table operations to the fact model:
+
+- **Table metadata** is stored under `__meta/table/<name>` keys
+- **Table rows** are stored under `table/<name>/<pk>` keys
+- Each row is a fact with the column values encoded in the payload
+
+```sql
+-- This INSERT:
+INSERT INTO users (id, name) VALUES ('u1', 'Alice');
+
+-- Creates a fact:
+--   key: "table/users/u1"
+--   commit_ts: <auto-assigned>
+--   valid_from: <now>
+--   valid_to: <infinity>
+--   payload: {"id": "u1", "name": "Alice"}
+```
+
+## Immutability
+
+"Updating" a row creates a **new fact** with a higher `commit_ts`:
+
+```sql
+INSERT INTO users (id, name) VALUES ('u1', 'Alice v2');
+-- Both versions exist! The latest commit_ts wins for current reads.
+-- Use AS OF to read older versions.
+```
+
+This is why SpectraDB is called a **ledger** — the complete history is always preserved.

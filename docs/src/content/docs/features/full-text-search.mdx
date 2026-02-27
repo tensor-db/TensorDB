@@ -1,0 +1,49 @@
+---
+draft: false
+head: []
+title: Full-Text Search
+description: Built-in full-text search with tokenization and relevance scoring in SpectraDB.
+---
+
+SpectraDB includes a built-in full-text search (FTS) engine as a facet alongside the relational SQL surface.
+
+## Creating an FTS Index
+
+```rust
+// Enable FTS on a key prefix
+db.create_fts_index("articles/")?;
+```
+
+## Indexing Documents
+
+```rust
+db.put("articles/1", Value::Text(
+    "SpectraDB is a bitemporal database with MVCC support".into()
+))?;
+
+db.put("articles/2", Value::Text(
+    "The LSM storage engine uses bloom filters for fast lookups".into()
+))?;
+```
+
+## Searching
+
+```rust
+let results = db.fts_search("articles/", "bitemporal MVCC")?;
+for (key, score) in results {
+    println!("{}: relevance={:.2}", key, score);
+}
+```
+
+## Features
+
+- **Tokenization**: Text is split into tokens for indexing
+- **Relevance scoring**: TF-IDF based scoring ranks results by relevance
+- **Prefix matching**: Search for partial words
+- **Boolean queries**: AND, OR operators for combining terms
+
+## Use Cases
+
+- Document search within the database
+- Log analysis and filtering
+- Content-based retrieval alongside structured SQL queries

@@ -1,0 +1,40 @@
+---
+draft: false
+head: []
+title: Risk Scoring
+description: Inline per-write anomaly detection in SpectraDB.
+---
+
+When `ai_inline_risk_assessment` is enabled, every write receives a risk score based on anomaly detection.
+
+## How It Works
+
+The risk scorer evaluates each write inline (synchronously):
+
+1. **Feature extraction**: Key pattern, value size, write frequency, temporal metadata
+2. **Anomaly scoring**: Statistical model compares features against historical patterns
+3. **Score assignment**: Risk score from 0.0 (normal) to 1.0 (highly anomalous)
+4. **Annotation**: Score is attached to the write result
+
+## Enabling
+
+```rust
+let mut config = Config::default();
+config.ai_inline_risk_assessment = true;
+config.ai_access_stats_size = 2048;  // Track more keys for better baseline
+let db = Database::open("data", config)?;
+```
+
+## What Triggers High Risk Scores
+
+| Pattern | Risk Level | Example |
+|---------|-----------|---------|
+| Normal write | Low (0.0–0.2) | Regular insert to known table |
+| Unusual key pattern | Medium (0.3–0.5) | Write to previously unseen key prefix |
+| Value size anomaly | Medium (0.4–0.6) | Payload 10x larger than average |
+| Write frequency spike | High (0.6–0.8) | 100x normal write rate to a key |
+| Temporal anomaly | High (0.7–0.9) | valid_from in the far past or future |
+
+## Performance
+
+Risk scoring adds ~2–5µs per write, which is negligible compared to the overall write latency.

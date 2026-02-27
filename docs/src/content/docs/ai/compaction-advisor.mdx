@@ -1,0 +1,35 @@
+---
+draft: false
+head: []
+title: Compaction Advisor
+description: AI-guided compaction optimization in SpectraDB.
+---
+
+The compaction advisor monitors compaction patterns and suggests optimal timing and level targets.
+
+## What It Monitors
+
+- **L0 file accumulation rate**: How fast L0 fills up
+- **Compaction duration**: Time spent in compaction per level
+- **Write amplification**: Bytes written to disk vs. bytes received
+- **Level size distribution**: Actual vs. target sizes per level
+
+## Enabling
+
+```rust
+let mut config = Config::default();
+config.ai_compaction_advisor = true;
+let db = Database::open("data", config)?;
+```
+
+## How It Helps
+
+The advisor is passive — it observes and reports, but doesn't automatically modify compaction behavior. Its suggestions include:
+
+- **Threshold adjustments**: Recommend changing `compaction_l0_threshold` based on observed patterns
+- **Timing optimization**: Suggest compacting during low-write periods
+- **Level target tuning**: Recommend `compaction_size_ratio` adjustments
+
+## Insights Storage
+
+Compaction advisor insights are stored under `__ai/compaction/` keys and can be queried like any other data.

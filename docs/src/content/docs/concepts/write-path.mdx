@@ -1,0 +1,97 @@
+---
+draft: false
+head: []
+title: Write Path
+description: How data flows from client writes through WAL, memtable, and SSTable flush in SpectraDB.
+---
+
+SpectraDB offers two write paths: the **fast path** (direct, lock-free) and the **channel path** (via shard actor).
+
+## Fast Write Path (Default)
+
+The fast write path bypasses the shard actor's crossbeam channel for maximum performance:
+
+```
+Client → hash(key) % shard_count → ShardShared (atomic) → WAL append → Memtable insert → Done
+```
+
+Performance: **~1.9µs per write** (20x faster than SQLite's 38.6µs)
+
+### How It Works
+
+1. **Shard routing**: `hash(key) % shard_count` determines the target shard
+2. **Commit counter**: `commit_counter.fetch_add(1)` atomically assigns a timestamp
+3. **WAL append**: Write is appended to the group WAL (batched, one fsync per cycle)
+4. **Memtable insert**: Data is inserted into the shard's concurrent skip list
+5. **Acknowledgment**: Write returns immediately after memtable insert
+
+### Group WAL
+
+The `DurabilityThread` batches WAL writes across all shards:
+
+- Collects writes during a configurable batch interval (default: 1ms)
+- Issues a single `fdatasync` per batch
+- Dramatically reduces fsync overhead for high-throughput workloads
+
+### Fallback Conditions
+
+The fast path falls back to the channel path when:
+
+- **Memtable full**: Backpressure — the memtable needs to flush first
+- **Subscribers active**: Change feed subscribers need event notifications
+- **Fast write disabled**: `config.fast_write_enabled = false`
+
+## Channel Path (Fallback)
+
+The traditional path sends writes through a crossbeam channel to the shard actor:
+
+```
+Client → Channel → Shard Actor → WAL append → Memtable insert → Response channel → Done
+```
+
+Performance: **~161µs per write** (still fast, but 80x slower than the direct path)
+
+This path is used when the shard actor needs to coordinate operations like flush or compaction.
+
+## Write Flow Diagram
+
+```
+┌─────────┐
+│  Client  │
+└────┬─────┘
+     │ hash(key) % shard_count
+     ▼
+┌─────────────────────────────────────────┐
+│            ShardShared                   │
+│  ┌──────────────┐  ┌─────────────────┐  │
+│  │commit_counter│  │has_subscribers  │  │
+│  │  (AtomicU64) │  │  (AtomicBool)   │  │
+│  └──────────────┘  └─────────────────┘  │
+└────┬──────────────────────┬─────────────┘
+     │ fast path             │ channel path
+     │ (no subscribers,      │ (fallback)
+     │  memtable not full)   │
+     ▼                       ▼
+┌──────────┐          ┌────────────┐
+│ Group WAL│          │ Shard Actor│
+│ (batched │          │ (single    │
+│  fdatasync)         │  writer)   │
+└────┬─────┘          └─────┬──────┘
+     │                      │
+     ▼                      ▼
+┌──────────┐          ┌──────────┐
+│ Memtable │          │   WAL    │
+│ (skip    │          │(per-shard)│
+│  list)   │          └────┬─────┘
+└──────────┘               │
+                           ▼
+                     ┌──────────┐
+                     │ Memtable │
+                     └──────────┘
+```
+
+## Durability Guarantees
+
+- WAL append completes before a write is acknowledged
+- Group WAL batches fsync calls (configurable interval)
+- Crash recovery replays WAL to restore memtable state

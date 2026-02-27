@@ -1,0 +1,60 @@
+---
+draft: false
+head: []
+title: DML — Data Manipulation
+description: INSERT, UPDATE, and DELETE statements in SpectraDB.
+---
+
+## INSERT
+
+Every INSERT creates an immutable fact in the ledger.
+
+```sql
+-- Single row
+INSERT INTO users (id, name, email) VALUES ('u1', 'Alice', 'alice@co.com');
+
+-- Multiple columns
+INSERT INTO products (id, name, price, category)
+VALUES ('p1', 'Widget', 9.99, 'tools');
+```
+
+### INSERT behavior
+
+- Each INSERT assigns a new `commit_ts` (monotonically increasing)
+- The row is stored as `table/<table_name>/<first_column_value>`
+- No uniqueness constraint — inserting the same key creates a new version
+
+## UPDATE
+
+UPDATE in SpectraDB creates a **new version** of matching rows:
+
+```sql
+UPDATE users SET name = 'Alice Chen' WHERE id = 'u1';
+```
+
+This doesn't modify the original row. Instead, it writes a new fact with a higher `commit_ts`. The original is still accessible via `AS OF`.
+
+## DELETE
+
+DELETE performs a **soft delete** by writing a tombstone:
+
+```sql
+DELETE FROM users WHERE id = 'u1';
+```
+
+The row becomes invisible to current queries but remains in the ledger. Time-travel queries (`AS OF`) can still see it.
+
+## Write Batching
+
+For bulk inserts, use the Rust API for better performance:
+
+```rust
+let batch = vec![
+    ("key1", Value::Text("value1".into())),
+    ("key2", Value::Text("value2".into())),
+    ("key3", Value::Text("value3".into())),
+];
+db.put_batch(batch)?;
+```
+
+Write batching amortizes the WAL fsync cost across multiple writes.

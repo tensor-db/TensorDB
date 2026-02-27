@@ -1,0 +1,63 @@
+---
+draft: false
+head: []
+title: AI Runtime
+description: SpectraDB's embedded Tier-0 AI runtime with risk scoring, insights, and advisors.
+---
+
+SpectraDB includes an embedded AI runtime that operates in-process alongside the storage engine. This is a **Tier-0** design — AI computation runs inside the database, not as an external service.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────┐
+│              SpectraDB Engine             │
+│  ┌────────────┐  ┌──────────────────┐   │
+│  │ Storage    │  │ AI Runtime       │   │
+│  │ Engine     │──│  ├ Risk Scoring  │   │
+│  │            │  │  ├ Insights      │   │
+│  │ WAL/Mem/  │  │  ├ Query Advisor │   │
+│  │ SSTable   │  │  ├ Cache Advisor │   │
+│  │            │  │  └ Compaction    │   │
+│  └────────────┘  │    Advisor      │   │
+│                   └──────────────────┘   │
+└──────────────────────────────────────────┘
+```
+
+## Features
+
+| Feature | Description | Config Flag |
+|---------|-------------|-------------|
+| [Auto Insights](/ai/insights/) | Pattern synthesis from write streams | `ai_auto_insights` |
+| [Risk Scoring](/ai/risk-scoring/) | Inline anomaly detection per write | `ai_inline_risk_assessment` |
+| [Query Advisor](/ai/query-advisor/) | Access pattern analysis and recommendations | `ai_annotate_reads` |
+| [Compaction Advisor](/ai/compaction-advisor/) | Compaction timing and level optimization | `ai_compaction_advisor` |
+| [Cache Advisor](/ai/cache-advisor/) | Cache sizing and eviction recommendations | `ai_cache_advisor` |
+
+## Enabling AI Features
+
+All AI features are opt-in:
+
+```rust
+let mut config = Config::default();
+config.ai_auto_insights = true;
+config.ai_inline_risk_assessment = true;
+config.ai_annotate_reads = true;
+config.ai_compaction_advisor = true;
+config.ai_cache_advisor = true;
+config.ai_access_stats_size = 4096;
+
+let db = Database::open("data", config)?;
+```
+
+## Data Isolation
+
+AI insights are stored under the `__ai/` key prefix and are **invisible to user change feeds**. This prevents AI metadata from polluting application-level event streams.
+
+## Performance Overhead
+
+The AI runtime is designed to be lightweight:
+- Inline risk scoring adds ~2–5µs per write
+- Batch insight synthesis runs asynchronously in the background
+- Advisors are passive observers — they monitor but don't modify behavior
+- Total overhead is gated by the CI `ai_overhead_gate.sh` script

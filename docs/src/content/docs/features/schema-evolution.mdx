@@ -1,0 +1,48 @@
+---
+draft: false
+head: []
+title: Schema Evolution
+description: Evolving table schemas over time in SpectraDB.
+---
+
+SpectraDB supports schema evolution through ALTER TABLE statements while preserving full compatibility with historical data.
+
+## Adding Columns
+
+```sql
+ALTER TABLE users ADD COLUMN phone TEXT;
+```
+
+- Existing rows return `NULL` for the new column
+- New rows can include the column
+- No data migration needed — the schema change is metadata-only
+
+## Dropping Columns
+
+```sql
+ALTER TABLE users DROP COLUMN phone;
+```
+
+- The column is removed from the schema metadata
+- Existing data is not modified (immutable)
+- Historical queries (AS OF) still return the column if it existed at that time
+
+## Renaming Columns
+
+```sql
+ALTER TABLE users RENAME COLUMN email TO email_address;
+```
+
+## Schema and Bitemporality
+
+Because SpectraDB is bitemporal, schema evolution has a unique property:
+
+- The **current schema** is defined by the latest metadata at the current commit_ts
+- **Historical schemas** are preserved — `AS OF` queries use the schema that was active at that timestamp
+- This means time-travel queries always return data in the schema format that was valid at that time
+
+## Best Practices
+
+- **Add columns** instead of modifying types (additive changes are safe)
+- Use `NULL` defaults for new columns to maintain backward compatibility
+- Test schema changes with `AS OF` queries to verify temporal consistency

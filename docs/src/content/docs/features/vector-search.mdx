@@ -1,0 +1,86 @@
+---
+draft: false
+head: []
+title: Vector Search
+description: Native vector similarity search in SpectraDB for AI/ML and RAG applications.
+---
+
+SpectraDB includes native vector similarity search, enabling AI/ML applications to store and query embeddings directly in the database.
+
+## Storing Vectors
+
+```rust
+use spectradb::Value;
+
+// Store a 384-dimensional embedding
+let embedding = vec![0.1, 0.05, -0.23, /* ... 384 dims */];
+db.put("doc/article-1/embedding", Value::Vector(embedding))?;
+```
+
+## SQL Interface
+
+```sql
+-- Create a table with a vector column
+CREATE TABLE documents (
+    id TEXT,
+    title TEXT,
+    content TEXT,
+    embedding VECTOR
+);
+
+-- Insert with vector data
+INSERT INTO documents VALUES (
+    'doc1',
+    'Introduction to SpectraDB',
+    'SpectraDB is a bitemporal...',
+    VECTOR([0.1, 0.05, -0.23, ...])
+);
+```
+
+## Similarity Search
+
+```sql
+-- Find 5 most similar documents using cosine similarity
+SELECT id, title, COSINE_SIMILARITY(embedding, VECTOR([0.12, 0.03, ...])) as score
+FROM documents
+ORDER BY score DESC
+LIMIT 5;
+```
+
+## Distance Metrics
+
+| Metric | Function | Best For |
+|--------|----------|----------|
+| Cosine | `COSINE_SIMILARITY(a, b)` | Text embeddings, normalized vectors |
+| Euclidean | `EUCLIDEAN_DISTANCE(a, b)` | Spatial data, image features |
+| Dot Product | `DOT_PRODUCT(a, b)` | Pre-normalized vectors, MaxIP search |
+
+## RAG Pipeline Example
+
+```rust
+// 1. Store document embeddings
+for doc in documents {
+    let embedding = embed_model.encode(&doc.content)?;
+    db.sql(
+        "INSERT INTO docs (id, content, embedding) VALUES ($1, $2, $3)",
+        &[Value::Text(doc.id), Value::Text(doc.content), Value::Vector(embedding)]
+    )?;
+}
+
+// 2. Query: find relevant context
+let query_embedding = embed_model.encode("How does bitemporal work?")?;
+let context = db.sql(
+    "SELECT content FROM docs ORDER BY COSINE_SIMILARITY(embedding, $1) DESC LIMIT 3",
+    &[Value::Vector(query_embedding)]
+)?;
+
+// 3. Pass context to LLM
+let answer = llm.generate(&format!("Context: {:?}\nQuestion: How does bitemporal work?", context))?;
+```
+
+## Use Cases
+
+- **Semantic search**: Find documents by meaning, not keywords
+- **RAG (Retrieval-Augmented Generation)**: Store and retrieve context for LLMs
+- **Recommendation systems**: Find similar items based on embeddings
+- **Anomaly detection**: Detect outlier vectors in streaming data

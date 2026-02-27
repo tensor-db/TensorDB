@@ -22,6 +22,11 @@
 # Tool config
 .claude/
 
+# Docs site build artifacts
+docs/node_modules/
+docs/dist/
+docs/.astro/
+
 # Editor / OS noise
 .DS_Store
 .idea/

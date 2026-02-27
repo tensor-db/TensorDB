@@ -1,0 +1,56 @@
+---
+draft: false
+head: []
+title: Authorization
+description: Role-based access control for SpectraDB.
+---
+
+:::note[Roadmap Feature]
+Authorization is planned for a future release.
+:::
+
+## Planned RBAC Model
+
+### Roles
+
+| Role | Permissions |
+|------|------------|
+| Admin | Full access — DDL, DML, configuration, AI features |
+| ReadWrite | DML (INSERT, UPDATE, DELETE) + SELECT |
+| ReadOnly | SELECT only |
+| AIAdmin | AI feature configuration and insight access |
+
+### Table-Level Permissions
+
+```sql
+-- Grant read access on specific tables
+GRANT SELECT ON users TO role_readonly;
+
+-- Grant write access
+GRANT INSERT, UPDATE ON orders TO role_readwrite;
+
+-- Revoke access
+REVOKE ALL ON admin_logs FROM role_readwrite;
+```
+
+### Key Prefix Permissions
+
+For the key-value API, permissions can be scoped to key prefixes:
+
+```rust
+// Only allow reads under "public/" prefix
+config.auth_prefix_rules = vec![
+    PrefixRule { prefix: "public/", role: Role::ReadOnly, allow: true },
+    PrefixRule { prefix: "__ai/", role: Role::AIAdmin, allow: true },
+];
+```
+
+## Audit Logging
+
+All access attempts (successful and denied) are logged:
+- Who accessed what (key or table)
+- When (commit_ts)
+- What operation (read, write, DDL)
+- Result (allowed, denied)
+
+SpectraDB's immutable ledger naturally provides an audit trail for all write operations.

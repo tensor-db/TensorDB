@@ -1,0 +1,60 @@
+---
+draft: false
+head: []
+title: Architecture
+description: How SpectraDB is structured — from the database engine to shards, storage levels, and the AI runtime.
+---
+
+import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
+
+SpectraDB is a single-node, append-only, bitemporal ledger database. Every component is designed around one principle: **data is immutable**.
+
+<ArchitectureDiagram />
+
+## Core Layers
+
+### Database Engine
+
+The `Database` struct is the public API entry point. It handles:
+
+- **SQL parsing and execution** — Parses SQL statements, generates query plans, and executes them
+- **Shard routing** — Routes writes to the correct shard via `hash(key) % shard_count`
+- **Configuration** — Manages all tuning knobs through the `Config` struct
+
+### Shards
+
+Each shard is a **single-writer actor** that owns:
+- A WAL (write-ahead log) handle
+- An in-memory memtable (skip list)
+- A local commit counter (monotonically increasing)
+
+Shards are independent — no coordination between shards is needed for writes. This enables high write throughput through parallelism.
+
+### Storage Engine (LSM-Tree)
+
+Data flows through the LSM tree:
+
+1. **WAL** — Every write is first appended to the write-ahead log with CRC framing
+2. **Memtable** — The write is then inserted into the in-memory skip list
+3. **Flush** — When the memtable reaches `memtable_max_bytes` (default 4MB), it's flushed to an L0 SSTable
+4. **Compaction** — L0 SSTables are merged into L1, L1 into L2, etc., up to L6
+
+### AI Runtime
+
+The Tier-0 AI runtime runs in-process alongside the storage engine:
+
+- **Inline risk scoring** — Evaluates each write for anomalies
+- **Batched insight synthesis** — Aggregates write patterns and generates insights
+- **Advisors** — Query, cache, and compaction advisors that monitor and suggest optimizations
+
+AI data is stored under the `__ai/` key prefix and is invisible to user change feeds.
+
+## Design Principles
+
+| Principle | Implementation |
+|-----------|---------------|
+| Immutability | No in-place updates; all data is append-only |
+| Temporal completeness | Every fact has system time + business time |
+| Crash safety | WAL fsync before acknowledging writes |
+| Lock-free reads | `ShardReadHandle` bypasses the actor channel |
+| Zero-copy where possible | `mmap` reads for SSTable access |

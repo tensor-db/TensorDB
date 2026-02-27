@@ -1,0 +1,120 @@
+---
+draft: false
+head: []
+title: API Reference
+description: Core Rust API reference for SpectraDB.
+---
+
+## Database
+
+The main entry point for all operations.
+
+### `Database::open(path, config) -> Result<Database>`
+
+Opens or creates a database at the given path.
+
+```rust
+let db = Database::open("my_data", Config::default())?;
+```
+
+### `Database::sql(query, params) -> Result<QueryResult>`
+
+Executes a SQL query with optional parameters.
+
+```rust
+let results = db.sql("SELECT * FROM users WHERE id = $1", &[Value::Text("u1".into())])?;
+```
+
+### `Database::put(key, value) -> Result<()>`
+
+Writes a key-value pair.
+
+```rust
+db.put("user/alice", Value::Text("Alice".into()))?;
+```
+
+### `Database::get(key) -> Result<Option<Value>>`
+
+Reads the latest value for a key.
+
+```rust
+if let Some(value) = db.get("user/alice")? {
+    println!("{:?}", value);
+}
+```
+
+### `Database::get_as_of(key, commit_ts) -> Result<Option<Value>>`
+
+Reads a key at a specific commit timestamp.
+
+```rust
+let value = db.get_as_of("user/alice", 500)?;
+```
+
+### `Database::put_temporal(key, value, valid_from, valid_to) -> Result<()>`
+
+Writes a fact with explicit business time.
+
+```rust
+db.put_temporal("policy/rate", Value::Real(4.25), 1704067200, 1735689600)?;
+```
+
+### `Database::scan_prefix(prefix) -> Result<Vec<(String, Value)>>`
+
+Scans all keys with a given prefix.
+
+```rust
+let results = db.scan_prefix("user/")?;
+```
+
+### `Database::put_batch(entries) -> Result<()>`
+
+Writes multiple key-value pairs in a batch.
+
+```rust
+let batch = vec![
+    ("k1", Value::Text("v1".into())),
+    ("k2", Value::Text("v2".into())),
+];
+db.put_batch(batch)?;
+```
+
+### `Database::subscribe() -> Result<ChangeStream>`
+
+Subscribes to real-time change events.
+
+```rust
+let mut stream = db.subscribe()?;
+```
+
+## QueryResult
+
+Returned by `Database::sql()`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `columns` | `Vec<String>` | Column names |
+| `rows` | `Vec<Vec<Value>>` | Row data |
+| `rows_affected` | `usize` | Number of rows affected (for DML) |
+
+## Value
+
+The universal value type.
+
+```rust
+pub enum Value {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    Real(f64),
+    Text(String),
+    Blob(Vec<u8>),
+    Array(Vec<Value>),
+    Object(BTreeMap<String, Value>),
+    Vector(Vec<f32>),
+}
+```
+
+## Config
+
+See [Configuration Reference](/reference/config/) for all parameters.

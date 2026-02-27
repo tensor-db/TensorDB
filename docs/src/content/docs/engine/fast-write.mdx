@@ -1,0 +1,86 @@
+---
+draft: false
+head: []
+title: Fast Write Path
+description: SpectraDB's direct write path for 20× faster writes than SQLite.
+---
+
+The fast write path bypasses the shard actor's crossbeam channel for direct, lock-free writes.
+
+## Performance
+
+| Path | Latency | Relative |
+|------|---------|----------|
+| Fast write path | ~1.9µs | **1×** (baseline) |
+| Channel path | ~161µs | 85× slower |
+| SQLite | ~38.6µs | 20× slower |
+
+## Architecture
+
+```
+Fast Path:                    Channel Path (fallback):
+
+Client                        Client
+  │                             │
+  ▼                             ▼
+AtomicU64::fetch_add          crossbeam::channel::send
+(commit counter)               │
+  │                             ▼
+  ▼                           Shard Actor (single writer)
+Group WAL append                │
+  │                             ▼
+Memtable insert               Per-shard WAL append
+  │                             │
+  ▼                             ▼
+Done (~1.9µs)                 Memtable insert
+                                │
+                                ▼
+                              Done (~161µs)
+```
+
+## Key Components
+
+### Atomic Commit Counter
+
+`ShardShared.commit_counter` is an `AtomicU64`. The fast path uses `fetch_add(1)` to atomically assign monotonically increasing timestamps without locks.
+
+The shard actor syncs its `local_commit_counter` from the atomic before each write to stay consistent.
+
+### Group WAL (DurabilityThread)
+
+Instead of each write issuing its own fsync, the `DurabilityThread`:
+
+1. Collects WAL entries from all shards during a batch interval
+2. Writes all entries to the WAL file
+3. Issues a single `fdatasync`
+4. Notifies writers of completion
+
+Default batch interval: 1000µs (configurable via `fast_write_wal_batch_interval_us`).
+
+### Memtable Backpressure
+
+Before writing, the fast path checks if the memtable has space:
+- **Under capacity**: Proceed with fast path write
+- **At capacity**: Fall back to channel path, which triggers a memtable flush
+
+## Fallback Conditions
+
+The fast path automatically falls back to the channel path when:
+
+1. **Memtable full** — Backpressure; flush needed
+2. **Subscribers active** — Change feed subscribers need event notifications
+3. **Disabled** — `config.fast_write_enabled = false`
+
+```rust
+// The has_subscribers flag is checked atomically
+if shard_shared.has_subscribers.load(Ordering::Relaxed) {
+    // Fall back to channel path for subscriber notification
+}
+```
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `fast_write_enabled` | `true` | Enable direct write path |
+| `fast_write_wal_batch_interval_us` | `1000` | Group WAL batch interval |

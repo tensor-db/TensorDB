@@ -1,0 +1,41 @@
+---
+draft: false
+head: []
+title: Memtable
+description: SpectraDB's in-memory skip list for fast writes and recent reads.
+---
+
+The memtable is an in-memory sorted data structure (skip list) that holds recent writes before they're flushed to SSTables.
+
+## Operations
+
+- **Insert**: O(log n) — new facts are inserted in key + commit_ts order
+- **Point lookup**: O(log n) — binary search for a specific key
+- **Prefix scan**: O(log n + k) — seek to prefix, iterate k matches
+- **Range scan**: O(log n + k) — seek to start, iterate through range
+
+## Flush Trigger
+
+When the memtable reaches `memtable_max_bytes` (default: 4MB), it's frozen and flushed to an L0 SSTable:
+
+1. The current memtable is frozen (made immutable)
+2. A new empty memtable is created for incoming writes
+3. The frozen memtable is serialized as an SSTable
+4. The SSTable is registered in the manifest
+5. The WAL for flushed records can be truncated
+
+## Fast Write Path Interaction
+
+The fast write path checks memtable size **before** each write:
+- If the memtable is below capacity: write directly (fast path)
+- If the memtable is full: fall back to the channel path, triggering a flush
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `memtable_max_bytes` | 4MB | Maximum memtable size before flush |
+
+:::tip
+Larger memtables reduce flush frequency (better write throughput) but increase memory usage and crash recovery time.
+:::

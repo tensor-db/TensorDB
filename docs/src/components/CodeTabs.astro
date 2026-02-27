@@ -1,0 +1,71 @@
+---
+interface Props {
+  tabs: string[];  // e.g., ["Rust", "Python", "Node.js", "SQL"]
+}
+
+const { tabs } = Astro.props;
+---
+
+<div class="code-tabs">
+  <div class="code-tabs-header" role="tablist">
+    {tabs.map((tab, i) => (
+      <button
+        class={`code-tab-button ${i === 0 ? 'active' : ''}`}
+        role="tab"
+        data-tab={tab.toLowerCase().replace(/[^a-z0-9]/g, '')}
+        aria-selected={i === 0 ? 'true' : 'false'}
+      >
+        {tab}
+      </button>
+    ))}
+  </div>
+  <div class="code-tabs-body">
+    {tabs.map((tab, i) => (
+      <div
+        class={`code-tab-panel ${i === 0 ? 'active' : ''}`}
+        role="tabpanel"
+        data-tab-panel={tab.toLowerCase().replace(/[^a-z0-9]/g, '')}
+      >
+        <slot name={tab.toLowerCase().replace(/[^a-z0-9]/g, '')} />
+      </div>
+    ))}
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll('.code-tabs').forEach(tabGroup => {
+    const buttons = tabGroup.querySelectorAll('.code-tab-button');
+    const panels = tabGroup.querySelectorAll('.code-tab-panel');
+
+    buttons.forEach(button => {
+      button.addEventListener('click', () => {
+        const tab = button.getAttribute('data-tab');
+
+        buttons.forEach(b => {
+          b.classList.remove('active');
+          b.setAttribute('aria-selected', 'false');
+        });
+        panels.forEach(p => p.classList.remove('active'));
+
+        button.classList.add('active');
+        button.setAttribute('aria-selected', 'true');
+        const panel = tabGroup.querySelector(`[data-tab-panel="${tab}"]`);
+        if (panel) panel.classList.add('active');
+      });
+    });
+  });
+</script>
+
+<style>
+  .code-tab-panel {
+    display: none;
+  }
+  .code-tab-panel.active {
+    display: block;
+  }
+  .code-tab-panel :global(pre) {
+    margin: 0 !important;
+    border-radius: 0 !important;
+    border: none !important;
+  }
+</style>

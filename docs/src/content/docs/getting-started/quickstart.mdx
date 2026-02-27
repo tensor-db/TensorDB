@@ -1,0 +1,114 @@
+---
+draft: false
+head: []
+title: Quickstart
+description: Get up and running with SpectraDB in 5 minutes. Create a database, write data, and run your first queries.
+---
+
+This guide gets you from zero to running SQL queries in under 5 minutes.
+
+## 1. Create a Project
+
+```bash
+cargo new my-spectradb-app
+cd my-spectradb-app
+cargo add spectradb
+```
+
+## 2. Open a Database
+
+```rust
+use spectradb::{Database, Config};
+
+fn main() -> spectradb::Result<()> {
+    // Open (or create) a database at the given path
+    let db = Database::open("my_data", Config::default())?;
+
+    println!("SpectraDB ready!");
+    Ok(())
+}
+```
+
+The `Config::default()` gives you sensible defaults: 4 shards, 4MB memtable, bloom filters, fast write path enabled.
+
+## 3. Create Tables and Insert Data
+
+```rust
+// Create a table with typed columns
+db.sql("CREATE TABLE products (
+    id TEXT,
+    name TEXT,
+    price REAL,
+    category TEXT
+)", &[])?;
+
+// Insert rows — each becomes an immutable fact
+db.sql("INSERT INTO products VALUES ('p1', 'Widget', 9.99, 'tools')", &[])?;
+db.sql("INSERT INTO products VALUES ('p2', 'Gadget', 24.99, 'electronics')", &[])?;
+db.sql("INSERT INTO products VALUES ('p3', 'Gizmo', 14.99, 'tools')", &[])?;
+```
+
+## 4. Query Your Data
+
+```rust
+// Basic SELECT
+let results = db.sql("SELECT name, price FROM products WHERE category = 'tools'", &[])?;
+for row in &results.rows {
+    println!("{}: ${}", row[0], row[1]);
+}
+// Output:
+//   Widget: $9.99
+//   Gizmo: $14.99
+
+// Aggregation
+let stats = db.sql("SELECT category, COUNT(*), AVG(price) FROM products GROUP BY category", &[])?;
+
+// Ordering and limits
+let top = db.sql("SELECT name, price FROM products ORDER BY price DESC LIMIT 1", &[])?;
+```
+
+## 5. Time Travel
+
+Every write records a `commit_ts` (commit timestamp). You can query any past state:
+
+```rust
+// Insert more data
+db.sql("INSERT INTO products VALUES ('p1', 'Widget Pro', 19.99, 'tools')", &[])?;
+
+// Query the current state
+let now = db.sql("SELECT name, price FROM products WHERE id = 'p1'", &[])?;
+// Returns: Widget Pro, $19.99
+
+// Query the state as of an earlier commit
+let past = db.sql("SELECT name, price FROM products WHERE id = 'p1' AS OF 1", &[])?;
+// Returns: Widget, $9.99
+```
+
+## 6. Bitemporal Queries
+
+SpectraDB separates *when data was recorded* (system time) from *when data was valid* (business time):
+
+```rust
+use spectradb::Value;
+
+// Write a fact with an explicit business-time range
+db.put_temporal(
+    "policy/POL-001/rate",
+    Value::Real(4.25),
+    1704067200,  // valid_from: Jan 1, 2024
+    1735689600,  // valid_to: Dec 31, 2024
+)?;
+
+// Query: what rate was valid on June 15, 2024?
+let result = db.sql(
+    "SELECT * FROM __keys__ WHERE key = 'policy/POL-001/rate' VALID AT 1718409600",
+    &[]
+)?;
+```
+
+## Next Steps
+
+- [Configuration](/getting-started/configuration/) — Tune performance, enable AI features
+- [SQL Reference](/sql/) — Full SQL syntax guide
+- [Architecture](/concepts/architecture/) — Understand the internals
+- [Bitemporal Model](/concepts/bitemporal/) — Deep dive into time dimensions

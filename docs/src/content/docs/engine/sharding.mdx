@@ -1,0 +1,57 @@
+---
+draft: false
+head: []
+title: Sharding
+description: Hash-based key partitioning across independent shard actors in SpectraDB.
+---
+
+SpectraDB distributes data across multiple shards for write parallelism.
+
+## Shard Routing
+
+Keys are routed deterministically:
+
+```
+shard_id = hash(key) % shard_count
+```
+
+Each shard is an independent actor with its own:
+- WAL file
+- Memtable
+- SSTable files and manifest
+- Commit counter (monotonically increasing)
+
+## Single-Writer Actors
+
+Each shard uses a single-writer actor model:
+- **One writer thread** per shard processes writes sequentially
+- **No fine-grained locks** needed — the actor serializes all writes
+- **Multiple readers** via `ShardReadHandle` (lock-free)
+
+This design eliminates write contention while enabling concurrent reads.
+
+## Parallelism
+
+With `shard_count = 4` (default):
+- 4 independent write pipelines
+- Writes to different shards execute concurrently
+- Cross-shard queries (e.g., full table scans) merge results from all shards
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `shard_count` | 4 | Number of independent shards |
+
+### Choosing Shard Count
+
+| Workload | Recommendation |
+|----------|---------------|
+| Single-threaded | 1–2 shards |
+| General purpose | 4 shards (default) |
+| Write-heavy | 8–16 shards |
+| Many cores | Match to core count |
+
+:::caution
+Shard count cannot be changed after database creation. Choose carefully based on your expected workload.
+:::

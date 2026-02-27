@@ -1,0 +1,49 @@
+---
+interface Props {
+  icon: string;
+  title: string;
+  description: string;
+  href?: string;
+}
+
+const { icon, title, description, href } = Astro.props;
+const Tag = href ? 'a' : 'div';
+---
+
+<Tag class="feature-card" href={href}>
+  <div class="feature-card-icon">{icon}</div>
+  <h3 class="feature-card-title">{title}</h3>
+  <p class="feature-card-description">{description}</p>
+  {href && <span class="feature-card-link">Learn more →</span>}
+</Tag>
+
+<style>
+  .feature-card {
+    text-decoration: none;
+    color: inherit;
+    display: block;
+  }
+  .feature-card-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 1rem 0 0.5rem;
+    color: var(--sl-color-white);
+  }
+  .feature-card-description {
+    font-size: 0.9rem;
+    color: var(--sl-color-gray-3);
+    line-height: 1.6;
+    margin: 0;
+  }
+  .feature-card-link {
+    display: inline-block;
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--spectra-blue);
+    transition: color 0.2s;
+  }
+  .feature-card:hover .feature-card-link {
+    color: var(--spectra-violet);
+  }
+</style>

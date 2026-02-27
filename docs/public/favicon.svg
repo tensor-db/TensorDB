@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#8B5CF6" />
+    </linearGradient>
+    <linearGradient id="grad-accent" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6" />
+      <stop offset="50%" stop-color="#6D5CF6" />
+      <stop offset="100%" stop-color="#8B5CF6" />
+    </linearGradient>
+  </defs>
+  <!-- Outer hexagonal frame -->
+  <polygon points="64,4 118,34 118,94 64,124 10,94 10,34"
+           stroke="url(#grad)" stroke-width="4" fill="none" stroke-linejoin="round" />
+  <!-- Stylized geometric "S" -->
+  <path d="
+    M 82 32
+    L 46 32
+    C 36 32 30 40 30 48
+    C 30 56 36 64 46 64
+    L 82 64
+    C 92 64 98 72 98 80
+    C 98 88 92 96 82 96
+    L 46 96
+  "
+  stroke="url(#grad-accent)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+  <!-- Top-right accent dot -->
+  <circle cx="90" cy="28" r="4" fill="#3B82F6" />
+  <!-- Bottom-left accent dot -->
+  <circle cx="38" cy="100" r="4" fill="#8B5CF6" />
+</svg>

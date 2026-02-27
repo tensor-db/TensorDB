@@ -1,0 +1,70 @@
+---
+draft: false
+head: []
+title: Read Path
+description: How SpectraDB serves reads — from cache hits through bloom filters to SSTable lookups.
+---
+
+SpectraDB's read path is optimized for low latency with the `ShardReadHandle` that bypasses the shard actor channel entirely.
+
+## Direct Read Path
+
+Performance: **276ns** per point read (4x faster than SQLite's 1.08µs)
+
+```
+Client → ShardReadHandle → Cache check → Bloom probe → Memtable → SSTable levels → Merge → Result
+```
+
+The `ShardReadHandle` holds read-only references to the shard's memtable and SSTable manifest, avoiding any channel overhead.
+
+## Read Flow
+
+### 1. Cache Check
+
+The block cache (LRU, default 32MB) is checked first. Cache hits return data in nanoseconds.
+
+### 2. Bloom Filter Probe
+
+Before scanning any SSTable, the bloom filter is probed. With 10 bits per key (default), the false positive rate is ~1%. A negative bloom result skips the entire SSTable.
+
+### 3. Memtable Scan
+
+The current memtable (skip list) is scanned for matching keys. Since the memtable holds the most recent data, this catches recent writes.
+
+### 4. SSTable Level Lookup
+
+If the key isn't in the memtable, SSTables are searched level by level:
+
+- **L0**: Unsorted, may overlap — all L0 files are checked
+- **L1-L6**: Sorted, non-overlapping — binary search finds the right file
+
+### 5. Temporal Predicate Filter
+
+Results are filtered by temporal predicates:
+- **AS OF `<commit_ts>`**: Only facts with `commit_ts <= target` are visible
+- **VALID AT `<valid_ts>`**: Only facts where `valid_from <= target < valid_to` are visible
+
+### 6. Merge
+
+If multiple versions exist, they're merged with the latest `commit_ts` winning (for current reads).
+
+## Read Optimizations
+
+| Optimization | Impact |
+|-------------|--------|
+| Direct `ShardReadHandle` | Bypasses channel, ~4x faster than SQLite |
+| Block cache (LRU) | Avoids disk I/O for hot data |
+| Index cache | Avoids re-reading SSTable indexes |
+| Bloom filters | Skips SSTables that don't contain the key |
+| Prefix compression | Reduces SSTable size, faster scans |
+| mmap reads | Zero-copy disk access |
+
+## Prefix Scans
+
+For range queries, SpectraDB scans all keys with a common prefix:
+
+```rust
+let results = db.scan_prefix("user/alice/")?;
+```
+
+This efficiently finds all keys like `user/alice/profile`, `user/alice/orders`, etc.

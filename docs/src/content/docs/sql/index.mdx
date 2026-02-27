@@ -1,0 +1,41 @@
+---
+draft: false
+head: []
+title: SQL Reference
+description: Complete SQL reference for SpectraDB — DDL, DML, queries, temporal operations, and 60+ built-in functions.
+---
+
+import SqlPlayground from '../../../components/SqlPlayground.astro';
+
+SpectraDB provides a full SQL query surface over its append-only ledger storage. SQL is the primary interface for creating tables, inserting data, and querying.
+
+## Quick Demo
+
+<SqlPlayground />
+
+## SQL Capabilities
+
+| Category | Features |
+|----------|----------|
+| **DDL** | CREATE TABLE, DROP TABLE, ALTER TABLE (ADD/DROP/RENAME COLUMN) |
+| **DML** | INSERT, UPDATE (creates new version), DELETE (soft delete) |
+| **Queries** | SELECT, WHERE, ORDER BY, LIMIT/OFFSET, GROUP BY, HAVING |
+| **Joins** | INNER JOIN, LEFT JOIN, CROSS JOIN |
+| **Subqueries** | Scalar subqueries, IN subqueries, EXISTS |
+| **CTEs** | WITH ... AS (common table expressions) |
+| **Aggregates** | COUNT, SUM, AVG, MIN, MAX, GROUP_CONCAT |
+| **Window Functions** | ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, SUM/AVG OVER |
+| **Temporal** | AS OF (time travel), VALID AT (bitemporal) |
+| **Explain** | EXPLAIN, EXPLAIN ANALYZE |
+| **Prepared** | Parameterized queries with $1, $2, ... |
+| **Functions** | 60+ string, numeric, datetime, and utility functions |
+
+## Sections
+
+- [DDL](/sql/ddl/) — CREATE, DROP, ALTER TABLE
+- [DML](/sql/dml/) — INSERT, UPDATE, DELETE
+- [Queries](/sql/queries/) — SELECT, JOINs, CTEs, subqueries
+- [Temporal Queries](/sql/temporal-queries/) — AS OF, VALID AT
+- [Functions](/sql/functions/) — All built-in functions
+- [EXPLAIN](/sql/explain/) — Query plan analysis
+- [Prepared Statements](/sql/prepared-statements/) — Parameterized queries

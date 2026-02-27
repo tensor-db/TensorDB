@@ -1,0 +1,43 @@
+---
+draft: false
+head: []
+title: Raft Consensus
+description: Raft-based consensus for multi-node SpectraDB clusters.
+---
+
+:::note[Roadmap Feature]
+Raft consensus is planned for a future release. This page describes the intended architecture.
+:::
+
+SpectraDB's clustering layer will use the Raft consensus protocol for leader election and log replication.
+
+## Architecture
+
+```
+┌─────────┐    ┌─────────┐    ┌─────────┐
+│ Node 1  │◄──►│ Node 2  │◄──►│ Node 3  │
+│ (Leader) │    │(Follower)│    │(Follower)│
+└─────────┘    └─────────┘    └─────────┘
+```
+
+## Design Goals
+
+- **Strong consistency**: All reads and writes go through the Raft leader
+- **Automatic failover**: If the leader fails, followers elect a new leader
+- **Append-only replication**: SpectraDB's immutable fact model maps naturally to Raft's replicated log
+- **Bitemporal preservation**: All temporal metadata is replicated faithfully
+
+## How It Will Work
+
+1. **Leader election**: Raft elects a leader node among cluster members
+2. **Write path**: Writes go to the leader, which replicates to followers via the Raft log
+3. **Commit**: Once a majority acknowledge, the write is committed
+4. **Read path**: Reads can be served from any node (with configurable consistency)
+
+## Consistency Levels
+
+| Level | Description | Latency |
+|-------|-------------|---------|
+| Strong | Read from leader only | Higher |
+| Bounded staleness | Read from follower within time bound | Medium |
+| Eventual | Read from any node | Lowest |

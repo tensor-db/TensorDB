@@ -1,0 +1,166 @@
+---
+interface Benchmark {
+  label: string;
+  bars: { engine: string; value: number; unit: string; class: string }[];
+  maxValue: number;
+}
+
+const benchmarks: Benchmark[] = [
+  {
+    label: "Point Read Latency (lower is better)",
+    maxValue: 1200,
+    bars: [
+      { engine: "SpectraDB", value: 276, unit: "ns", class: "spectra" },
+      { engine: "sled", value: 244, unit: "ns", class: "sled" },
+      { engine: "redb", value: 573, unit: "ns", class: "redb" },
+      { engine: "SQLite", value: 1080, unit: "ns", class: "sqlite" },
+    ]
+  },
+  {
+    label: "Point Write Latency (lower is better)",
+    maxValue: 40000,
+    bars: [
+      { engine: "SpectraDB", value: 1900, unit: "ns", class: "spectra" },
+      { engine: "sled", value: 9200, unit: "ns", class: "sled" },
+      { engine: "redb", value: 18400, unit: "ns", class: "redb" },
+      { engine: "SQLite", value: 38600, unit: "ns", class: "sqlite" },
+    ]
+  },
+  {
+    label: "Prefix Scan (100 keys, lower is better)",
+    maxValue: 200,
+    bars: [
+      { engine: "SpectraDB", value: 45, unit: "µs", class: "spectra" },
+      { engine: "sled", value: 38, unit: "µs", class: "sled" },
+      { engine: "redb", value: 89, unit: "µs", class: "redb" },
+      { engine: "SQLite", value: 156, unit: "µs", class: "sqlite" },
+    ]
+  },
+  {
+    label: "Mixed Workload (80% read, 20% write)",
+    maxValue: 15000,
+    bars: [
+      { engine: "SpectraDB", value: 2100, unit: "ns", class: "spectra" },
+      { engine: "sled", value: 4800, unit: "ns", class: "sled" },
+      { engine: "redb", value: 7200, unit: "ns", class: "redb" },
+      { engine: "SQLite", value: 12400, unit: "ns", class: "sqlite" },
+    ]
+  }
+];
+
+function formatValue(value: number, unit: string): string {
+  if (value >= 1000 && unit === 'ns') {
+    return `${(value / 1000).toFixed(1)}µs`;
+  }
+  return `${value}${unit}`;
+}
+---
+
+<div class="perf-chart">
+  <div class="perf-legend">
+    <span class="perf-legend-item"><span class="perf-legend-dot spectra"></span> SpectraDB</span>
+    <span class="perf-legend-item"><span class="perf-legend-dot sled"></span> sled</span>
+    <span class="perf-legend-item"><span class="perf-legend-dot redb"></span> redb</span>
+    <span class="perf-legend-item"><span class="perf-legend-dot sqlite"></span> SQLite</span>
+  </div>
+
+  {benchmarks.map(bench => (
+    <div class="perf-bar-group">
+      <div class="perf-bar-label">{bench.label}</div>
+      {bench.bars.map(bar => (
+        <div class="perf-bar-row">
+          <span class="perf-bar-engine">{bar.engine}</span>
+          <div class="perf-bar">
+            <div
+              class={`perf-bar-fill ${bar.class}`}
+              style={`width: ${Math.max((bar.value / bench.maxValue) * 100, 3)}%`}
+            >
+              <span class="perf-bar-value">{formatValue(bar.value, bar.unit)}</span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  ))}
+
+  <p class="perf-note">
+    Benchmarks run on Linux x86_64, single-threaded, 1M pre-loaded keys.
+    Lower is better for all measurements. See <a href="/performance/benchmarks/">full benchmarks</a>.
+  </p>
+</div>
+
+<style>
+  .perf-legend {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+  }
+  .perf-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-3);
+  }
+  .perf-legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+  }
+  .perf-legend-dot.spectra { background: var(--spectra-gradient); }
+  .perf-legend-dot.sled { background: #f59e0b; }
+  .perf-legend-dot.redb { background: #10b981; }
+  .perf-legend-dot.sqlite { background: #64748b; }
+
+  .perf-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.4rem;
+  }
+  .perf-bar-engine {
+    font-size: 0.8rem;
+    color: var(--sl-color-gray-3);
+    width: 80px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .perf-bar {
+    flex: 1;
+    height: 28px;
+    background: var(--spectra-card-bg);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+  .perf-bar-fill {
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 8px;
+    min-width: 60px;
+  }
+  .perf-bar-fill.spectra { background: var(--spectra-gradient); }
+  .perf-bar-fill.sled { background: #f59e0b; }
+  .perf-bar-fill.redb { background: #10b981; }
+  .perf-bar-fill.sqlite { background: #64748b; }
+
+  .perf-bar-value {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: white;
+    white-space: nowrap;
+  }
+  .perf-note {
+    margin-top: 1.5rem;
+    font-size: 0.8rem;
+    color: var(--sl-color-gray-4);
+    font-style: italic;
+  }
+  .perf-note a {
+    color: var(--spectra-blue);
+  }
+</style>

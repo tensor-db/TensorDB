@@ -1,0 +1,215 @@
+---
+interface ConfigParam {
+  name: string;
+  type: string;
+  default: string;
+  description: string;
+  constraint?: string;
+}
+
+interface ConfigGroup {
+  title: string;
+  params: ConfigParam[];
+}
+
+const groups: ConfigGroup[] = [
+  {
+    title: "Storage",
+    params: [
+      { name: "wal_fsync_every_n_records", type: "usize", default: "128", description: "Number of WAL records before issuing an fsync. Lower values increase durability but reduce write throughput.", constraint: "> 0" },
+      { name: "memtable_max_bytes", type: "usize", default: "4MB", description: "Maximum size of the in-memory memtable before flushing to an SSTable. Larger values reduce flush frequency but increase memory usage.", constraint: ">= 1024" },
+      { name: "sstable_block_bytes", type: "usize", default: "16KB", description: "Size of each data block within SSTables. Larger blocks improve sequential read throughput; smaller blocks reduce read amplification for point lookups.", constraint: ">= 512" },
+      { name: "sstable_max_file_bytes", type: "u64", default: "64MB", description: "Maximum size of a single SSTable file. Controls the granularity of compaction units." },
+      { name: "bloom_bits_per_key", type: "usize", default: "10", description: "Number of bits allocated per key in bloom filters. 10 bits gives ~1% false positive rate. Higher values reduce false positives at the cost of memory.", constraint: ">= 4" },
+    ]
+  },
+  {
+    title: "Caching",
+    params: [
+      { name: "block_cache_bytes", type: "usize", default: "32MB", description: "Total memory budget for the SSTable block cache (LRU). Caches decompressed data blocks for fast repeated access." },
+      { name: "index_cache_entries", type: "usize", default: "1024", description: "Maximum number of SSTable index blocks to cache. Each entry maps to one SSTable's block index." },
+    ]
+  },
+  {
+    title: "Compaction",
+    params: [
+      { name: "compaction_l0_threshold", type: "usize", default: "8", description: "Number of L0 SSTables that trigger compaction into L1. Lower thresholds keep L0 small but increase compaction frequency.", constraint: "> 0" },
+      { name: "compaction_l1_target_bytes", type: "u64", default: "10MB", description: "Target total size for Level 1. Higher levels are sized as L1 × size_ratio^(level-1)." },
+      { name: "compaction_size_ratio", type: "u64", default: "10", description: "Size multiplier between adjacent levels. A ratio of 10 means L2 targets 100MB, L3 targets 1GB, etc." },
+      { name: "compaction_max_levels", type: "usize", default: "7", description: "Maximum number of LSM levels (L0 through L6). More levels allow more data but increase worst-case read amplification.", constraint: ">= 2" },
+    ]
+  },
+  {
+    title: "Sharding",
+    params: [
+      { name: "shard_count", type: "usize", default: "4", description: "Number of independent shards. Keys are routed by hash(key) % shard_count. More shards improve write parallelism but increase resource usage.", constraint: "> 0" },
+    ]
+  },
+  {
+    title: "Fast Write Path",
+    params: [
+      { name: "fast_write_enabled", type: "bool", default: "true", description: "Enable the direct fast write path that bypasses the shard actor channel. Provides ~20× write speedup. Falls back to channel path when memtable is full or subscribers are active." },
+      { name: "fast_write_wal_batch_interval_us", type: "u64", default: "1000", description: "Interval in microseconds for the group WAL durability thread to batch and fsync writes. Lower values reduce latency; higher values improve throughput." },
+    ]
+  },
+  {
+    title: "AI Runtime",
+    params: [
+      { name: "ai_auto_insights", type: "bool", default: "false", description: "Enable automatic insight synthesis from write patterns. The AI runtime batches events and generates insights stored under the __ai/ key prefix." },
+      { name: "ai_batch_window_ms", type: "u64", default: "20", description: "Time window in milliseconds for batching AI events before processing. Only used when ai_auto_insights is enabled.", constraint: "> 0 when ai_auto_insights enabled" },
+      { name: "ai_batch_max_events", type: "usize", default: "16", description: "Maximum number of events per AI batch. When reached, the batch is processed immediately without waiting for the full window.", constraint: "> 0 when ai_auto_insights enabled" },
+      { name: "ai_inline_risk_assessment", type: "bool", default: "false", description: "Enable inline risk scoring on every write. Adds a risk_score annotation to write results based on anomaly detection." },
+      { name: "ai_annotate_reads", type: "bool", default: "false", description: "Enable AI annotations on read results. Adds contextual metadata like access frequency and staleness indicators." },
+      { name: "ai_compaction_advisor", type: "bool", default: "false", description: "Enable the AI compaction advisor. Monitors compaction patterns and suggests optimal compaction timing and level targets." },
+      { name: "ai_cache_advisor", type: "bool", default: "false", description: "Enable the AI cache advisor. Analyzes access patterns and recommends cache sizing and eviction policy adjustments." },
+      { name: "ai_access_stats_size", type: "usize", default: "1024", description: "Number of key access records to retain for AI analysis. Used by query advisor, cache advisor, and access pattern analysis." },
+    ]
+  },
+];
+---
+
+<div class="config-explorer">
+  <input
+    type="text"
+    class="config-search"
+    placeholder="Search configuration parameters..."
+    id="config-search"
+  />
+
+  {groups.map(group => (
+    <div class="config-group" data-group={group.title.toLowerCase()}>
+      <div class="config-group-title">{group.title}</div>
+      {group.params.map(param => (
+        <div class="config-item" data-name={param.name}>
+          <div class="config-item-header">
+            <code class="config-item-name">{param.name}</code>
+            <span class="config-item-type">{param.type}</span>
+            <span class="config-item-default">{param.default}</span>
+          </div>
+          <div class="config-item-desc">{param.description}</div>
+          {param.constraint && (
+            <div class="config-item-constraint">Constraint: {param.constraint}</div>
+          )}
+        </div>
+      ))}
+    </div>
+  ))}
+</div>
+
+<script>
+  const searchInput = document.getElementById('config-search') as HTMLInputElement;
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      const query = searchInput.value.toLowerCase();
+      document.querySelectorAll('.config-item').forEach(item => {
+        const name = item.getAttribute('data-name') || '';
+        const desc = (item as HTMLElement).textContent?.toLowerCase() || '';
+        const match = name.includes(query) || desc.includes(query);
+        (item as HTMLElement).style.display = match ? '' : 'none';
+      });
+      document.querySelectorAll('.config-group').forEach(group => {
+        const visibleItems = group.querySelectorAll('.config-item:not([style*="display: none"])');
+        (group as HTMLElement).style.display = visibleItems.length > 0 ? '' : 'none';
+      });
+    });
+  }
+</script>
+
+<style>
+  .config-explorer {
+    border-radius: 12px;
+    border: 1px solid var(--spectra-card-border);
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.5);
+  }
+  .config-search {
+    width: 100%;
+    padding: 0.8rem 1.2rem;
+    background: #1E293B;
+    border: none;
+    border-bottom: 1px solid var(--spectra-card-border);
+    color: var(--sl-color-white);
+    font-size: 0.95rem;
+    font-family: var(--sl-font);
+    outline: none;
+    box-sizing: border-box;
+  }
+  .config-search::placeholder {
+    color: var(--sl-color-gray-4);
+  }
+  .config-search:focus {
+    background: #1a2736;
+  }
+  .config-group {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--spectra-card-border);
+  }
+  .config-group:last-child {
+    border-bottom: none;
+  }
+  .config-group-title {
+    font-weight: 700;
+    color: var(--spectra-blue);
+    margin-bottom: 0.75rem;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .config-item {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .config-item:last-child {
+    border-bottom: none;
+  }
+  .config-item-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .config-item-name {
+    font-family: var(--sl-font-mono);
+    font-weight: 600;
+    color: var(--sl-color-white);
+    font-size: 0.9rem;
+    background: rgba(59, 130, 246, 0.1);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+  }
+  .config-item-type {
+    font-family: var(--sl-font-mono);
+    font-size: 0.75rem;
+    color: var(--spectra-violet);
+    background: rgba(139, 92, 246, 0.1);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+  }
+  .config-item-default {
+    font-family: var(--sl-font-mono);
+    font-size: 0.8rem;
+    color: var(--spectra-emerald);
+    margin-left: auto;
+  }
+  .config-item-desc {
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-3);
+    margin-top: 0.4rem;
+    line-height: 1.5;
+  }
+  .config-item-constraint {
+    font-size: 0.75rem;
+    color: var(--spectra-amber);
+    margin-top: 0.3rem;
+    font-family: var(--sl-font-mono);
+  }
+  @media (max-width: 640px) {
+    .config-item-header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .config-item-default {
+      margin-left: 0;
+    }
+  }
+</style>

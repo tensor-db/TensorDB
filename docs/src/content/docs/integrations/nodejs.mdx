@@ -1,0 +1,83 @@
+---
+draft: false
+head: []
+title: Node.js Bindings
+description: Using SpectraDB from Node.js with napi-rs bindings.
+---
+
+SpectraDB provides Node.js bindings via napi-rs, enabling JavaScript and TypeScript applications to use the database.
+
+## Installation
+
+```bash
+npm install spectradb
+```
+
+## Quick Start
+
+```javascript
+const { Database } = require('spectradb');
+
+// Open a database
+const db = Database.open('my_data');
+
+// Create a table
+db.sql("CREATE TABLE users (id TEXT, name TEXT, email TEXT)");
+
+// Insert data
+db.sql("INSERT INTO users VALUES ('u1', 'Alice', 'alice@co.com')");
+
+// Query
+const results = db.sql("SELECT * FROM users");
+console.log(results);
+```
+
+## TypeScript
+
+```typescript
+import { Database, Config, Value } from 'spectradb';
+
+const db = Database.open('my_data');
+
+// Type-safe operations
+const results: QueryResult = db.sql("SELECT * FROM users WHERE id = $1", ["u1"]);
+
+for (const row of results.rows) {
+  console.log(`${row.name}: ${row.email}`);
+}
+```
+
+## Key-Value API
+
+```javascript
+// Write
+db.put('user/alice', 'Alice Chen');
+
+// Read
+const value = db.get('user/alice');
+
+// Scan
+const entries = db.scanPrefix('user/');
+for (const [key, value] of entries) {
+  console.log(`${key}: ${value}`);
+}
+```
+
+## Configuration
+
+```javascript
+const config = new Config();
+config.shardCount = 8;
+config.memtableMaxBytes = 8 * 1024 * 1024;
+config.aiAutoInsights = true;
+
+const db = Database.open('my_data', config);
+```
+
+## Building from Source
+
+```bash
+cd crates/spectradb-node
+npm install
+npm run build
+```

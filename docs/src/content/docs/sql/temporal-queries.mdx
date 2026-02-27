@@ -1,0 +1,71 @@
+---
+draft: false
+head: []
+title: Temporal Queries
+description: Time-travel with AS OF and bitemporal filtering with VALID AT.
+---
+
+SpectraDB's temporal query syntax lets you query across both time dimensions.
+
+## AS OF — System Time Travel
+
+Query the database as it existed at a specific commit timestamp:
+
+```sql
+-- See the state at commit 100
+SELECT * FROM users AS OF 100;
+
+-- Combined with WHERE
+SELECT name, balance FROM accounts AS OF 500
+WHERE account_id = 'acc_alice';
+```
+
+### Behavior
+
+- Returns only facts with `commit_ts <= specified_ts`
+- For each key, the latest version within that window is returned
+- If no version exists at that timestamp, the key is absent from results
+
+## VALID AT — Business Time Filter
+
+Query facts that were valid at a specific business timestamp:
+
+```sql
+-- What rate was valid on June 15, 2024?
+SELECT * FROM policies VALID AT 1718409600;
+```
+
+### Behavior
+
+- Returns facts where `valid_from <= specified_ts < valid_to`
+- Filters on the business-time dimension, independent of when the data was recorded
+
+## Combined: AS OF + VALID AT
+
+Use both together for full bitemporal queries:
+
+```sql
+-- What did the system know at commit 200, about rates valid in June 2024?
+SELECT rate FROM policies AS OF 200 VALID AT 1718409600;
+```
+
+## Use Cases
+
+| Pattern | SQL | Purpose |
+|---------|-----|---------|
+| Current state | `SELECT * FROM t` | Latest data |
+| Point-in-time audit | `SELECT * FROM t AS OF 100` | What was known at time 100 |
+| Business-time lookup | `SELECT * FROM t VALID AT ts` | What was valid at business time ts |
+| Full bitemporal | `SELECT * FROM t AS OF 100 VALID AT ts` | What was known at time 100 about business time ts |
+
+## Key-Value API
+
+For the key-value API, temporal reads are also supported:
+
+```rust
+// Time-travel read
+let value = db.get_as_of("user/alice", 500)?;
+
+// Bitemporal read
+let value = db.get_temporal("user/alice", Some(500), Some(1718409600))?;
+```

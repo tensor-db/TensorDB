@@ -1,0 +1,43 @@
+---
+draft: false
+head: []
+title: Cache Advisor
+description: AI-guided cache optimization in SpectraDB.
+---
+
+The cache advisor analyzes access patterns and recommends cache configuration adjustments.
+
+## What It Monitors
+
+- **Cache hit ratio**: Percentage of reads served from cache
+- **Working set size**: Estimated size of frequently accessed data
+- **Access distribution**: Hot vs. cold data patterns
+- **Eviction frequency**: How often cache entries are evicted
+
+## Enabling
+
+```rust
+let mut config = Config::default();
+config.ai_cache_advisor = true;
+config.ai_access_stats_size = 4096;
+let db = Database::open("data", config)?;
+```
+
+## Recommendations
+
+The cache advisor provides suggestions like:
+
+| Recommendation | When | Action |
+|---------------|------|--------|
+| Increase block cache | Hit ratio < 80% and working set > cache size | Increase `block_cache_bytes` |
+| Decrease block cache | Hit ratio > 98% and cache utilization < 50% | Reduce to save memory |
+| Increase index cache | Frequent index cache misses | Increase `index_cache_entries` |
+
+## Accessing Recommendations
+
+```rust
+let recs = db.scan_prefix("__ai/cache/")?;
+for (key, value) in recs {
+    println!("Cache recommendation: {:?}", value);
+}
+```

@@ -1,0 +1,52 @@
+---
+draft: false
+head: []
+title: Caching
+description: Block cache and index cache for fast repeated reads in SpectraDB.
+---
+
+SpectraDB maintains two LRU caches to minimize disk I/O.
+
+## Block Cache
+
+Caches decompressed SSTable data blocks in memory.
+
+- **Eviction**: LRU (Least Recently Used)
+- **Default size**: 32MB (`block_cache_bytes`)
+- **Scope**: Shared across all shards
+
+When a data block is read from disk, it's stored in the block cache. Subsequent reads of the same block are served from memory.
+
+## Index Cache
+
+Caches SSTable block indexes for fast key-to-block mapping.
+
+- **Eviction**: LRU
+- **Default entries**: 1024 (`index_cache_entries`)
+- **Scope**: Shared across all shards
+
+Each SSTable has a block index that maps key ranges to block offsets. Caching these indexes avoids re-reading them from disk.
+
+## Cache Hit Monitoring
+
+Use `EXPLAIN ANALYZE` to see cache hit statistics:
+
+```sql
+EXPLAIN ANALYZE SELECT * FROM users WHERE id = 'u1';
+-- cache_hits: 2
+```
+
+The AI cache advisor (when enabled) monitors access patterns and recommends cache size adjustments.
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `block_cache_bytes` | 32MB | Total block cache budget |
+| `index_cache_entries` | 1024 | Maximum cached index blocks |
+
+## Tuning
+
+- **Read-heavy workloads**: Increase `block_cache_bytes` to fit your working set
+- **Many SSTables**: Increase `index_cache_entries` to avoid re-reading indexes
+- **Memory-constrained**: Reduce cache sizes; bloom filters will compensate

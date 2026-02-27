@@ -1,0 +1,130 @@
+---
+draft: false
+head: []
+title: Queries
+description: SELECT statements, JOINs, CTEs, GROUP BY, ORDER BY, and subqueries in SpectraDB.
+---
+
+## SELECT
+
+```sql
+-- All columns
+SELECT * FROM users;
+
+-- Specific columns
+SELECT name, email FROM users;
+
+-- With alias
+SELECT name AS user_name, email AS contact FROM users;
+
+-- With expressions
+SELECT name, price * 1.1 AS price_with_tax FROM products;
+```
+
+## WHERE
+
+```sql
+SELECT * FROM users WHERE age > 21;
+SELECT * FROM users WHERE name = 'Alice' AND status = 'active';
+SELECT * FROM users WHERE category IN ('tools', 'electronics');
+SELECT * FROM users WHERE name LIKE 'A%';
+SELECT * FROM users WHERE email IS NOT NULL;
+```
+
+### Operators
+
+| Operator | Example |
+|----------|---------|
+| `=`, `!=`, `<>` | `WHERE age = 25` |
+| `<`, `>`, `<=`, `>=` | `WHERE price > 10.0` |
+| `AND`, `OR`, `NOT` | `WHERE a > 1 AND b < 5` |
+| `IN` | `WHERE status IN ('active', 'pending')` |
+| `LIKE` | `WHERE name LIKE '%alice%'` |
+| `IS NULL`, `IS NOT NULL` | `WHERE email IS NOT NULL` |
+| `BETWEEN` | `WHERE age BETWEEN 18 AND 65` |
+
+## ORDER BY
+
+```sql
+SELECT * FROM products ORDER BY price ASC;
+SELECT * FROM products ORDER BY category, price DESC;
+```
+
+## LIMIT / OFFSET
+
+```sql
+SELECT * FROM products ORDER BY price LIMIT 10;
+SELECT * FROM products ORDER BY price LIMIT 10 OFFSET 20;
+```
+
+## GROUP BY / HAVING
+
+```sql
+SELECT category, COUNT(*), AVG(price)
+FROM products
+GROUP BY category;
+
+SELECT category, COUNT(*) as cnt
+FROM products
+GROUP BY category
+HAVING cnt > 5;
+```
+
+## JOINs
+
+```sql
+-- Inner join
+SELECT u.name, o.total
+FROM users u
+JOIN orders o ON u.id = o.user_id;
+
+-- Left join
+SELECT u.name, COALESCE(o.total, 0) as total
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id;
+
+-- Cross join
+SELECT a.name, b.name
+FROM team_a a
+CROSS JOIN team_b b;
+```
+
+## Common Table Expressions (CTEs)
+
+```sql
+WITH active_users AS (
+    SELECT id, name FROM users WHERE status = 'active'
+),
+user_orders AS (
+    SELECT user_id, SUM(total) as total_spent
+    FROM orders
+    GROUP BY user_id
+)
+SELECT au.name, uo.total_spent
+FROM active_users au
+JOIN user_orders uo ON au.id = uo.user_id
+ORDER BY uo.total_spent DESC;
+```
+
+## Subqueries
+
+```sql
+-- Scalar subquery
+SELECT name, (SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id) as order_count
+FROM users;
+
+-- IN subquery
+SELECT * FROM products
+WHERE category IN (SELECT category FROM featured_categories);
+
+-- EXISTS subquery
+SELECT * FROM users u
+WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id);
+```
+
+## DISTINCT
+
+```sql
+SELECT DISTINCT category FROM products;
+SELECT DISTINCT ON (category) name, price FROM products;
+```
