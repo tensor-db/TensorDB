@@ -51,9 +51,9 @@
    --------------------------------------------------------------------------- */
 :root[data-theme='light'] {
   --spectra-dark: #f1f5f9;
-  --spectra-surface: #f8fafc;
-  --spectra-card-bg: rgba(15, 23, 42, 0.03);
-  --spectra-card-border: rgba(15, 23, 42, 0.1);
+  --spectra-surface: #e2e8f0;
+  --spectra-card-bg: rgba(15, 23, 42, 0.05);
+  --spectra-card-border: rgba(15, 23, 42, 0.15);
   --spectra-glow: 0 0 20px rgba(59, 130, 246, 0.12);
   --spectra-text: #1e293b;
   --spectra-text-muted: #475569;
@@ -204,7 +204,7 @@
 }
 
 .perf-bar-fill.spectra { background: var(--spectra-gradient); }
-.perf-bar-fill.sqlite { background: #64748b; }
+.perf-bar-fill.sqlite { background: #475569; }
 .perf-bar-fill.sled { background: #f59e0b; }
 .perf-bar-fill.redb { background: #10b981; }
 
@@ -213,6 +213,7 @@
   font-weight: 600;
   color: #ffffff;
   white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 /* ---------------------------------------------------------------------------
@@ -304,7 +305,7 @@
 :root[data-theme='light'] .sql-kw { color: #2563eb; }
 :root[data-theme='light'] .sql-str { color: #16a34a; }
 :root[data-theme='light'] .sql-num { color: #d97706; }
-:root[data-theme='light'] .sql-cmt { color: #94a3b8; }
+:root[data-theme='light'] .sql-cmt { color: #64748b; }
 
 /* ---------------------------------------------------------------------------
    Config Explorer
@@ -444,7 +445,7 @@ pre {
 }
 
 nav.sidebar a[aria-current='page'] {
-  background: rgba(59, 130, 246, 0.12);
+  background-color: rgba(59, 130, 246, 0.12) !important;
   border-left: 3px solid var(--spectra-blue);
   color: var(--spectra-blue) !important;
   font-weight: 600;
