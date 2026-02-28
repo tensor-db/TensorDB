@@ -14,11 +14,11 @@
   --sl-content-width: 55rem;
 
   /* Brand */
-  --spectra-gradient: linear-gradient(135deg, #3B82F6, #8B5CF6);
-  --spectra-blue: #3B82F6;
-  --spectra-violet: #8B5CF6;
-  --spectra-emerald: #10B981;
-  --spectra-amber: #F59E0B;
+  --tensor-gradient: linear-gradient(135deg, #3B82F6, #8B5CF6);
+  --tensor-blue: #3B82F6;
+  --tensor-violet: #8B5CF6;
+  --tensor-emerald: #10B981;
+  --tensor-amber: #F59E0B;
 
   /* Starlight accent */
   --sl-color-accent-low: #1e1b4b;
@@ -36,28 +36,28 @@
   --sl-color-black: #020617;
 
   /* Semantic surface tokens */
-  --spectra-dark: #0F172A;
-  --spectra-surface: #1E293B;
-  --spectra-card-bg: rgba(255, 255, 255, 0.06);
-  --spectra-card-border: rgba(255, 255, 255, 0.12);
-  --spectra-glow: 0 0 20px rgba(59, 130, 246, 0.25);
-  --spectra-text: #e2e8f0;
-  --spectra-text-muted: #cbd5e1;
-  --spectra-text-faint: #94a3b8;
+  --tensor-dark: #0F172A;
+  --tensor-surface: #1E293B;
+  --tensor-card-bg: rgba(255, 255, 255, 0.06);
+  --tensor-card-border: rgba(255, 255, 255, 0.12);
+  --tensor-glow: 0 0 20px rgba(59, 130, 246, 0.25);
+  --tensor-text: #e2e8f0;
+  --tensor-text-muted: #cbd5e1;
+  --tensor-text-faint: #94a3b8;
 }
 
 /* ---------------------------------------------------------------------------
    Light theme
    --------------------------------------------------------------------------- */
 :root[data-theme='light'] {
-  --spectra-dark: #f1f5f9;
-  --spectra-surface: #e2e8f0;
-  --spectra-card-bg: rgba(15, 23, 42, 0.05);
-  --spectra-card-border: rgba(15, 23, 42, 0.15);
-  --spectra-glow: 0 0 20px rgba(59, 130, 246, 0.12);
-  --spectra-text: #1e293b;
-  --spectra-text-muted: #475569;
-  --spectra-text-faint: #64748b;
+  --tensor-dark: #f1f5f9;
+  --tensor-surface: #e2e8f0;
+  --tensor-card-bg: rgba(15, 23, 42, 0.05);
+  --tensor-card-border: rgba(15, 23, 42, 0.15);
+  --tensor-glow: 0 0 20px rgba(59, 130, 246, 0.12);
+  --tensor-text: #1e293b;
+  --tensor-text-muted: #475569;
+  --tensor-text-faint: #64748b;
 }
 
 /* ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@
 }
 
 .home-section + .home-section {
-  border-top: 1px solid var(--spectra-card-border);
+  border-top: 1px solid var(--tensor-card-border);
 }
 
 /* Feature grid */
@@ -133,7 +133,7 @@
   font-weight: 600;
   font-size: 0.9rem;
   text-decoration: none;
-  background: var(--spectra-gradient);
+  background: var(--tensor-gradient);
   color: #ffffff !important;
   transition: transform 0.2s, box-shadow 0.2s;
 }
@@ -151,13 +151,13 @@
   font-weight: 600;
   font-size: 0.9rem;
   text-decoration: none;
-  border: 1px solid var(--spectra-card-border);
-  color: var(--spectra-text) !important;
+  border: 1px solid var(--tensor-card-border);
+  color: var(--tensor-text) !important;
   transition: border-color 0.2s;
 }
 
 .cta-secondary:hover {
-  border-color: var(--spectra-blue);
+  border-color: var(--tensor-blue);
 }
 
 /* ---------------------------------------------------------------------------
@@ -190,14 +190,14 @@
   font-weight: 600;
   margin-bottom: 0.5rem;
   font-size: 0.88rem;
-  color: var(--spectra-text);
+  color: var(--tensor-text);
 }
 
 .perf-bar {
   height: 28px;
   border-radius: 6px;
   position: relative;
-  background: var(--spectra-card-bg);
+  background: var(--tensor-card-bg);
   overflow: hidden;
 }
 
@@ -217,7 +217,7 @@
   width: var(--bar-width);
 }
 
-.perf-bar-fill.spectra { background: var(--spectra-gradient); }
+.perf-bar-fill.tensor { background: var(--tensor-gradient); }
 .perf-bar-fill.sqlite { background: #475569; }
 .perf-bar-fill.sled { background: #f59e0b; }
 .perf-bar-fill.redb { background: #10b981; }
@@ -235,9 +235,9 @@
    --------------------------------------------------------------------------- */
 .sql-playground {
   border-radius: 10px;
-  border: 1px solid var(--spectra-card-border);
+  border: 1px solid var(--tensor-card-border);
   overflow: hidden;
-  background: var(--spectra-dark);
+  background: var(--tensor-dark);
   margin: 1.5rem 0;
 }
 
@@ -246,17 +246,17 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--spectra-surface);
-  border-bottom: 1px solid var(--spectra-card-border);
+  background: var(--tensor-surface);
+  border-bottom: 1px solid var(--tensor-card-border);
 }
 
 /* Custom styled select */
 .sql-playground-header select {
   appearance: none;
   -webkit-appearance: none;
-  background: var(--spectra-dark);
-  color: var(--spectra-text);
-  border: 1px solid var(--spectra-card-border);
+  background: var(--tensor-dark);
+  color: var(--tensor-text);
+  border: 1px solid var(--tensor-card-border);
   border-radius: 6px;
   padding: 0.4rem 2rem 0.4rem 0.8rem;
   font-family: var(--sl-font);
@@ -268,7 +268,7 @@
 }
 
 .sql-playground-header select:hover {
-  border-color: var(--spectra-blue);
+  border-color: var(--tensor-blue);
 }
 
 .sql-editor {
@@ -276,12 +276,12 @@
   font-family: var(--sl-font-mono);
   white-space: pre;
   line-height: 1.6;
-  color: var(--spectra-text);
+  color: var(--tensor-text);
   font-size: 0.85rem;
 }
 
 .sql-results {
-  border-top: 1px solid var(--spectra-card-border);
+  border-top: 1px solid var(--tensor-card-border);
   padding: 1rem 1.5rem;
 }
 
@@ -293,17 +293,17 @@
 .sql-results th {
   text-align: left;
   padding: 0.4rem 0.75rem;
-  border-bottom: 2px solid var(--spectra-blue);
+  border-bottom: 2px solid var(--tensor-blue);
   font-weight: 600;
   font-size: 0.8rem;
-  color: var(--spectra-blue);
+  color: var(--tensor-blue);
 }
 
 .sql-results td {
   padding: 0.4rem 0.75rem;
-  border-bottom: 1px solid var(--spectra-card-border);
+  border-bottom: 1px solid var(--tensor-card-border);
   font-size: 0.8rem;
-  color: var(--spectra-text);
+  color: var(--tensor-text);
 }
 
 .sql-results tr:last-child td {
@@ -326,35 +326,35 @@
    --------------------------------------------------------------------------- */
 .config-explorer {
   border-radius: 10px;
-  border: 1px solid var(--spectra-card-border);
+  border: 1px solid var(--tensor-card-border);
   overflow: hidden;
-  background: var(--spectra-card-bg);
+  background: var(--tensor-card-bg);
   margin: 1.5rem 0;
 }
 
 .config-search {
   width: 100%;
   padding: 0.75rem 1.2rem;
-  background: var(--spectra-surface);
+  background: var(--tensor-surface);
   border: none;
-  border-bottom: 1px solid var(--spectra-card-border);
-  color: var(--spectra-text);
+  border-bottom: 1px solid var(--tensor-card-border);
+  color: var(--tensor-text);
   font-size: 0.9rem;
   font-family: var(--sl-font);
   outline: none;
 }
 
 .config-search::placeholder {
-  color: var(--spectra-text-faint);
+  color: var(--tensor-text-faint);
 }
 
 .config-search:focus {
-  box-shadow: inset 0 -2px 0 var(--spectra-blue);
+  box-shadow: inset 0 -2px 0 var(--tensor-blue);
 }
 
 .config-group {
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--spectra-card-border);
+  border-bottom: 1px solid var(--tensor-card-border);
 }
 
 .config-group:last-child {
@@ -363,7 +363,7 @@
 
 .config-group-title {
   font-weight: 600;
-  color: var(--spectra-blue);
+  color: var(--tensor-blue);
   margin-bottom: 0.5rem;
   font-size: 0.9rem;
   text-transform: uppercase;
@@ -382,19 +382,19 @@
 .config-item-name {
   font-family: var(--sl-font-mono);
   font-weight: 500;
-  color: var(--spectra-text);
+  color: var(--tensor-text);
   font-size: 0.88rem;
 }
 
 .config-item-default {
   font-family: var(--sl-font-mono);
   font-size: 0.82rem;
-  color: var(--spectra-emerald);
+  color: var(--tensor-emerald);
 }
 
 .config-item-desc {
   font-size: 0.82rem;
-  color: var(--spectra-text-muted);
+  color: var(--tensor-text-muted);
   margin-top: 0.25rem;
   line-height: 1.5;
 }
@@ -403,10 +403,10 @@
    Architecture Diagram
    --------------------------------------------------------------------------- */
 .arch-diagram {
-  background: var(--spectra-dark);
+  background: var(--tensor-dark);
   border-radius: 10px;
   padding: 2rem;
-  border: 1px solid var(--spectra-card-border);
+  border: 1px solid var(--tensor-card-border);
   overflow-x: auto;
   margin: 1.5rem 0;
 }
@@ -427,7 +427,7 @@ a {
 }
 
 pre {
-  border: 1px solid var(--spectra-card-border) !important;
+  border: 1px solid var(--tensor-card-border) !important;
   border-radius: 8px !important;
 }
 
@@ -439,29 +439,29 @@ pre {
 
 .sl-markdown-content th {
   background: rgba(59, 130, 246, 0.1);
-  border-bottom: 2px solid var(--spectra-blue);
+  border-bottom: 2px solid var(--tensor-blue);
   padding: 0.5rem 0.75rem;
   text-align: left;
   font-weight: 600;
   font-size: 0.88rem;
-  color: var(--spectra-text);
+  color: var(--tensor-text);
 }
 
 .sl-markdown-content td {
   padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--spectra-card-border);
-  color: var(--spectra-text-muted);
+  border-bottom: 1px solid var(--tensor-card-border);
+  color: var(--tensor-text-muted);
   font-size: 0.88rem;
 }
 
 .sl-markdown-content tr:hover {
-  background: var(--spectra-card-bg);
+  background: var(--tensor-card-bg);
 }
 
 nav.sidebar a[aria-current='page'] {
   background-color: rgba(59, 130, 246, 0.12) !important;
-  border-left: 3px solid var(--spectra-blue);
-  color: var(--spectra-blue) !important;
+  border-left: 3px solid var(--tensor-blue);
+  color: var(--tensor-blue) !important;
   font-weight: 600;
 }
 

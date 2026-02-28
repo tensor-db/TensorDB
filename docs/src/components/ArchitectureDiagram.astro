@@ -143,17 +143,17 @@
 
 <style>
   .arch-diagram {
-    background: var(--spectra-dark);
+    background: var(--tensor-dark);
     border-radius: 12px;
     padding: 2rem;
-    border: 1px solid var(--spectra-card-border);
+    border: 1px solid var(--tensor-card-border);
     overflow-x: auto;
   }
   .arch-title {
     text-align: center;
     font-size: 1.2rem;
     font-weight: 700;
-    color: var(--spectra-text);
+    color: var(--tensor-text);
     margin-bottom: 2rem;
   }
   .arch-flow {
@@ -170,8 +170,8 @@
     flex-wrap: wrap;
   }
   .arch-node {
-    background: var(--spectra-card-bg);
-    border: 1px solid var(--spectra-card-border);
+    background: var(--tensor-card-bg);
+    border: 1px solid var(--tensor-card-border);
     border-radius: 10px;
     padding: 0.8rem 1.2rem;
     text-align: center;
@@ -179,7 +179,7 @@
     transition: border-color 0.3s, box-shadow 0.3s;
   }
   .arch-node:hover {
-    border-color: var(--spectra-blue);
+    border-color: var(--tensor-blue);
     box-shadow: 0 0 12px rgba(59, 130, 246, 0.2);
   }
   .arch-node-icon {
@@ -189,32 +189,32 @@
   .arch-node-label {
     font-weight: 600;
     font-size: 0.9rem;
-    color: var(--spectra-text);
+    color: var(--tensor-text);
   }
   .arch-node-detail {
     font-size: 0.75rem;
-    color: var(--spectra-text-muted);
+    color: var(--tensor-text-muted);
     margin-top: 0.2rem;
   }
-  .arch-node.client { border-color: var(--spectra-blue); }
-  .arch-node.database { border-color: var(--spectra-violet); }
-  .arch-node.shard { border-color: var(--spectra-emerald); }
+  .arch-node.client { border-color: var(--tensor-blue); }
+  .arch-node.database { border-color: var(--tensor-violet); }
+  .arch-node.shard { border-color: var(--tensor-emerald); }
   .arch-node.wal, .arch-node.memtable, .arch-node.flush {
-    border-color: var(--spectra-amber);
+    border-color: var(--tensor-amber);
   }
   .arch-node.cache-node, .arch-node.bloom-node, .arch-node.temporal-node {
-    border-color: var(--spectra-blue);
+    border-color: var(--tensor-blue);
   }
-  .arch-node.ai-node { border-color: var(--spectra-violet); }
+  .arch-node.ai-node { border-color: var(--tensor-violet); }
 
   .arch-arrow, .arch-arrow-split {
-    color: var(--spectra-text-faint);
+    color: var(--tensor-text-faint);
     font-size: 1.2rem;
     padding: 0.2rem 0;
   }
   .arch-arrow-split span {
     font-size: 0.8rem;
-    color: var(--spectra-text-muted);
+    color: var(--tensor-text-muted);
   }
   .arch-shards {
     display: flex;
@@ -228,7 +228,7 @@
     justify-content: center;
   }
   .arch-pipe {
-    color: var(--spectra-text-faint);
+    color: var(--tensor-text-faint);
     font-size: 1.2rem;
   }
   .arch-path-label {
@@ -236,16 +236,16 @@
     text-align: center;
     font-size: 0.8rem;
     font-weight: 600;
-    color: var(--spectra-blue);
+    color: var(--tensor-blue);
     margin-bottom: 0.5rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   .arch-write-path, .arch-read-path, .arch-storage, .arch-ai {
-    background: var(--spectra-card-bg);
+    background: var(--tensor-card-bg);
     border-radius: 10px;
     padding: 1rem;
-    border: 1px dashed var(--spectra-card-border);
+    border: 1px dashed var(--tensor-card-border);
     flex-direction: column;
   }
   .arch-levels {
@@ -264,13 +264,13 @@
   .arch-level-label {
     font-size: 0.8rem;
     font-weight: 600;
-    color: var(--spectra-text-muted);
+    color: var(--tensor-text-muted);
     width: 24px;
   }
   .arch-level-bar {
     height: 16px;
     border-radius: 4px;
-    background: var(--spectra-gradient);
+    background: var(--tensor-gradient);
     opacity: 0.6;
   }
   .l0 .arch-level-bar { width: 15%; }
@@ -281,7 +281,7 @@
   .arch-compaction-label {
     text-align: center;
     font-size: 0.75rem;
-    color: var(--spectra-text-faint);
+    color: var(--tensor-text-faint);
     margin-top: 0.5rem;
     font-style: italic;
   }

@@ -146,12 +146,12 @@ fn hash_password(password: &str, salt: &str) -> String {
     salt.hash(&mut hasher2);
     let h2 = hasher2.finish();
 
-    format!("spectra${}${:016x}{:016x}", salt, h1, h2)
+    format!("tensor${}${:016x}{:016x}", salt, h1, h2)
 }
 
 fn verify_password(password: &str, stored_hash: &str) -> bool {
     let parts: Vec<&str> = stored_hash.split('$').collect();
-    if parts.len() != 3 || parts[0] != "spectra" {
+    if parts.len() != 3 || parts[0] != "tensor" {
         return false;
     }
     let salt = parts[1];

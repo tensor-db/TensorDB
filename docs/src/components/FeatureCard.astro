@@ -22,25 +22,25 @@ const resolvedHref = href && href.startsWith('/') ? `${base}${href}` : href;
     color: inherit;
     display: flex;
     flex-direction: column;
-    background: var(--spectra-card-bg);
-    border: 1px solid var(--spectra-card-border);
+    background: var(--tensor-card-bg);
+    border: 1px solid var(--tensor-card-border);
     border-radius: 12px;
     padding: 1.5rem;
     transition: border-color 0.2s, box-shadow 0.2s;
   }
   .feature-card:hover {
-    border-color: var(--spectra-blue);
+    border-color: var(--tensor-blue);
     box-shadow: 0 4px 20px rgba(59, 130, 246, 0.12);
   }
   .feature-card-title {
     font-size: 1.05rem;
     font-weight: 600;
     margin: 0 0 0.5rem;
-    color: var(--spectra-text);
+    color: var(--tensor-text);
   }
   .feature-card-description {
     font-size: 0.88rem;
-    color: var(--spectra-text-muted);
+    color: var(--tensor-text-muted);
     line-height: 1.6;
     margin: 0;
     flex: 1;
@@ -50,9 +50,9 @@ const resolvedHref = href && href.startsWith('/') ? `${base}${href}` : href;
     margin-top: 1rem;
     font-size: 0.82rem;
     font-weight: 600;
-    color: var(--spectra-blue);
+    color: var(--tensor-blue);
   }
   .feature-card:hover .feature-card-link {
-    color: var(--spectra-violet);
+    color: var(--tensor-violet);
   }
 </style>

@@ -42,7 +42,7 @@ fn native_hasher_path_is_invoked_and_matches_rust() {
     let native = tensordb::native_bridge::build_hasher();
     let rust = RustHasher;
 
-    let inputs: [&[u8]; 4] = [b"", b"abc", b"spectra", b"0123456789abcdef"];
+    let inputs: [&[u8]; 4] = [b"", b"abc", b"tensor", b"0123456789abcdef"];
     for i in inputs {
         assert_eq!(native.hash64(i), rust.hash64(i));
     }

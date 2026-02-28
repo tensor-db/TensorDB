@@ -1855,7 +1855,7 @@ cargo test --workspace --all-targets
 
 **Step 2: Update memory file with EOAC architecture**
 
-Update `~/.claude/projects/-home-walebadr-spectraDB/memory/MEMORY.md` with:
+Update `~/.claude/projects/-home-walebadr-tensorDB/memory/MEMORY.md` with:
 - Global epoch architecture
 - Transaction model (intent-based with savepoints)
 - Index acceleration (predicate-to-index matching)
