@@ -29,6 +29,7 @@ export default defineConfig({
             { label: 'Configuration', link: '/getting-started/configuration/' },
           ],
         },
+        { label: 'Roadmap', link: '/roadmap/' },
         {
           label: 'Concepts',
           collapsed: true,

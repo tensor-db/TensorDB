@@ -145,7 +145,7 @@ pip install tensordb
 npm install tensordb
 
 # Rust
-cargo add spectradb
+cargo add tensordb
 ```
 
 ## Quickstart

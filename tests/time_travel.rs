@@ -1,7 +1,7 @@
 use tempfile::tempdir;
 
-use spectradb::config::Config;
-use spectradb::Database;
+use tensordb::config::Config;
+use tensordb::Database;
 
 #[test]
 fn reads_respect_as_of_commit_ts() {

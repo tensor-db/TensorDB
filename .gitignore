@@ -9,7 +9,7 @@
 /.local/
 
 # CLI shell history
-**/.spectradb_history
+**/.tensordb_history
 
 # Logs and temp files
 *.log
@@ -18,6 +18,11 @@
 # Environment files
 .env
 .env.*
+
+# Fine-tuning artifacts
+scripts/training_data.jsonl
+scripts/eval_data.jsonl
+scripts/output/
 
 # Docs site build artifacts
 docs/node_modules/

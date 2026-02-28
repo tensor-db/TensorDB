@@ -1,6 +1,6 @@
 /// Integration tests for v0.17 SQL Completeness features.
-use spectradb_core::config::Config;
-use spectradb_core::Database;
+use tensordb_core::config::Config;
+use tensordb_core::Database;
 
 fn test_db() -> (Database, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -10,7 +10,7 @@ fn test_db() -> (Database, tempfile::TempDir) {
 
 fn sql(db: &Database, query: &str) -> Vec<serde_json::Value> {
     match db.sql(query).unwrap() {
-        spectradb_core::sql::exec::SqlResult::Rows(rows) => rows
+        tensordb_core::sql::exec::SqlResult::Rows(rows) => rows
             .into_iter()
             .map(|r| {
                 serde_json::from_slice(&r).unwrap_or_else(|_| {
@@ -20,10 +20,10 @@ fn sql(db: &Database, query: &str) -> Vec<serde_json::Value> {
                 })
             })
             .collect(),
-        spectradb_core::sql::exec::SqlResult::Affected { message, .. } => {
+        tensordb_core::sql::exec::SqlResult::Affected { message, .. } => {
             vec![serde_json::json!({ "message": message })]
         }
-        spectradb_core::sql::exec::SqlResult::Explain(text) => {
+        tensordb_core::sql::exec::SqlResult::Explain(text) => {
             vec![serde_json::json!({ "explain": text })]
         }
     }
@@ -31,7 +31,7 @@ fn sql(db: &Database, query: &str) -> Vec<serde_json::Value> {
 
 fn sql_affected(db: &Database, query: &str) -> String {
     match db.sql(query).unwrap() {
-        spectradb_core::sql::exec::SqlResult::Affected { message, .. } => message,
+        tensordb_core::sql::exec::SqlResult::Affected { message, .. } => message,
         other => panic!("expected Affected, got: {other:?}"),
     }
 }

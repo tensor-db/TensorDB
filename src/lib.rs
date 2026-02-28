@@ -1,1 +1,1 @@
-pub use spectradb_core::*;
+pub use tensordb_core::*;

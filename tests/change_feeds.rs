@@ -1,6 +1,6 @@
-use spectradb::{Config, Database};
 use std::time::Duration;
 use tempfile::TempDir;
+use tensordb::{Config, Database};
 
 #[test]
 fn subscribe_receives_matching_events() {

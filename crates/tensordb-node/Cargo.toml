@@ -1,0 +1,16 @@
+[package]
+name = "tensordb-node"
+version = "0.2.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", features = ["default"] }
+napi-derive = "2"
+tensordb-core = { path = "../tensordb-core" }
+serde_json = "1"
+
+[build-dependencies]
+napi-build = "2"

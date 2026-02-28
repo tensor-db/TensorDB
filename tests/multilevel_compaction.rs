@@ -1,5 +1,5 @@
-use spectradb::{Config, Database};
 use tempfile::TempDir;
+use tensordb::{Config, Database};
 
 fn padding(ch: char, len: usize) -> String {
     std::iter::repeat_n(ch, len).collect()

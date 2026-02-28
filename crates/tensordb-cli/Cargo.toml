@@ -1,0 +1,18 @@
+[package]
+name = "tensordb-cli"
+version = "0.2.0"
+edition = "2021"
+description = "Interactive CLI shell for TensorDB with TAB completion, output modes, and AI features"
+license = "PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/tensor-db/tensorDB"
+
+[features]
+default = ["llm"]
+native = ["tensordb-core/native"]
+llm = ["tensordb-core/llm"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+rustyline = "14"
+serde_json = "1"
+tensordb-core = { path = "../tensordb-core" }

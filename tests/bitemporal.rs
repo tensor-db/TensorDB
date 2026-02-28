@@ -1,7 +1,7 @@
 use tempfile::tempdir;
 
-use spectradb::config::Config;
-use spectradb::Database;
+use tensordb::config::Config;
+use tensordb::Database;
 
 #[test]
 fn valid_at_filters_versions() {
@@ -34,12 +34,12 @@ fn valid_at_filters_versions() {
 #[cfg(feature = "native")]
 #[test]
 fn native_hasher_path_is_invoked_and_matches_rust() {
-    use spectradb::native_bridge::{
+    use tensordb::native_bridge::{
         native_hash_call_count, reset_native_hash_call_count, Hasher, RustHasher,
     };
 
     reset_native_hash_call_count();
-    let native = spectradb::native_bridge::build_hasher();
+    let native = tensordb::native_bridge::build_hasher();
     let rust = RustHasher;
 
     let inputs: [&[u8]; 4] = [b"", b"abc", b"spectra", b"0123456789abcdef"];

@@ -3,8 +3,8 @@
 //! Covers: point writes, point reads, batch writes, prefix scans, mixed workloads.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use spectradb::{Config, Database};
 use tempfile::TempDir;
+use tensordb::{Config, Database};
 
 const POPULATION: u64 = 10_000;
 const BATCH_SIZE: u64 = 100;
@@ -13,7 +13,7 @@ const BATCH_SIZE: u64 = 100;
 // TensorDB benchmarks
 // ---------------------------------------------------------------------------
 
-fn spectradb_point_write(c: &mut Criterion) {
+fn tensordb_point_write(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let db = Database::open(
         dir.path(),
@@ -25,7 +25,7 @@ fn spectradb_point_write(c: &mut Criterion) {
     .unwrap();
 
     let mut i = 0u64;
-    c.bench_function("spectradb/point_write", |b| {
+    c.bench_function("tensordb/point_write", |b| {
         b.iter(|| {
             let key = format!("bench/{i:08}");
             let doc = format!("{{\"n\":{i}}}").into_bytes();
@@ -35,7 +35,7 @@ fn spectradb_point_write(c: &mut Criterion) {
     });
 }
 
-fn spectradb_point_read(c: &mut Criterion) {
+fn tensordb_point_read(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let db = Database::open(
         dir.path(),
@@ -53,7 +53,7 @@ fn spectradb_point_read(c: &mut Criterion) {
     }
 
     let mut i = 0u64;
-    c.bench_function("spectradb/point_read", |b| {
+    c.bench_function("tensordb/point_read", |b| {
         b.iter(|| {
             let key = format!("bench/{:08}", i % POPULATION);
             let _ = db.get(key.as_bytes(), None, None);
@@ -62,7 +62,7 @@ fn spectradb_point_read(c: &mut Criterion) {
     });
 }
 
-fn spectradb_batch_write(c: &mut Criterion) {
+fn tensordb_batch_write(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let db = Database::open(
         dir.path(),
@@ -74,12 +74,12 @@ fn spectradb_batch_write(c: &mut Criterion) {
     .unwrap();
 
     let mut base = 0u64;
-    c.bench_function("spectradb/batch_write_100", |b| {
+    c.bench_function("tensordb/batch_write_100", |b| {
         b.iter(|| {
-            let entries: Vec<spectradb::WriteBatchItem> = (0..BATCH_SIZE)
+            let entries: Vec<tensordb::WriteBatchItem> = (0..BATCH_SIZE)
                 .map(|j| {
                     let key = format!("batch/{:08}", base + j);
-                    spectradb::WriteBatchItem {
+                    tensordb::WriteBatchItem {
                         user_key: key.into_bytes(),
                         doc: format!("{{\"n\":{}}}", base + j).into_bytes(),
                         valid_from: 0,
@@ -94,7 +94,7 @@ fn spectradb_batch_write(c: &mut Criterion) {
     });
 }
 
-fn spectradb_prefix_scan(c: &mut Criterion) {
+fn tensordb_prefix_scan(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let db = Database::open(
         dir.path(),
@@ -111,14 +111,14 @@ fn spectradb_prefix_scan(c: &mut Criterion) {
         let _ = db.put(key.as_bytes(), doc, 0, u64::MAX, Some(1));
     }
 
-    c.bench_function("spectradb/prefix_scan_1000", |b| {
+    c.bench_function("tensordb/prefix_scan_1000", |b| {
         b.iter(|| {
             let _ = db.scan_prefix(b"scan/", None, None, None);
         })
     });
 }
 
-fn spectradb_mixed_workload(c: &mut Criterion) {
+fn tensordb_mixed_workload(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let db = Database::open(
         dir.path(),
@@ -136,7 +136,7 @@ fn spectradb_mixed_workload(c: &mut Criterion) {
     }
 
     let mut i = 5_000u64;
-    c.bench_function("spectradb/mixed_80r_20w", |b| {
+    c.bench_function("tensordb/mixed_80r_20w", |b| {
         b.iter(|| {
             if i.is_multiple_of(5) {
                 let key = format!("mixed/{i:08}");
@@ -570,7 +570,7 @@ fn throughput_reads(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(1));
         let mut i = 0u64;
-        group.bench_with_input(BenchmarkId::new("spectradb", size), &size, |b, &_size| {
+        group.bench_with_input(BenchmarkId::new("tensordb", size), &size, |b, &_size| {
             b.iter(|| {
                 let key = format!("bench/{:08}", i % size);
                 let _ = db.get(key.as_bytes(), None, None);
@@ -602,11 +602,11 @@ fn throughput_reads(c: &mut Criterion) {
 
 criterion_group!(
     single_op,
-    spectradb_point_write,
+    tensordb_point_write,
     sqlite_point_write,
     sled_point_write,
     redb_point_write,
-    spectradb_point_read,
+    tensordb_point_read,
     sqlite_point_read,
     sled_point_read,
     redb_point_read,
@@ -614,11 +614,11 @@ criterion_group!(
 
 criterion_group!(
     batch_and_scan,
-    spectradb_batch_write,
+    tensordb_batch_write,
     sqlite_batch_write,
     sled_batch_write,
     redb_batch_write,
-    spectradb_prefix_scan,
+    tensordb_prefix_scan,
     sqlite_prefix_scan,
     sled_prefix_scan,
     redb_prefix_scan,
@@ -626,7 +626,7 @@ criterion_group!(
 
 criterion_group!(
     mixed,
-    spectradb_mixed_workload,
+    tensordb_mixed_workload,
     sqlite_mixed_workload,
     sled_mixed_workload,
     redb_mixed_workload,

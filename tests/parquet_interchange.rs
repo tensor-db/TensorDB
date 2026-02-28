@@ -1,9 +1,9 @@
 // Integration tests for Parquet support (requires --features parquet).
 #![cfg(feature = "parquet")]
 
-use spectradb_core::config::Config;
-use spectradb_core::sql::exec::SqlResult;
-use spectradb_core::Database;
+use tensordb_core::config::Config;
+use tensordb_core::sql::exec::SqlResult;
+use tensordb_core::Database;
 
 fn test_db() -> (Database, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();

@@ -1,10 +1,10 @@
 use tempfile::tempdir;
 
-use spectradb::config::Config;
-use spectradb::ledger::internal_key::{encode_internal_key, KIND_PUT};
-use spectradb::ledger::record::{FactMetadata, FactValue, FactWrite};
-use spectradb::storage::wal::Wal;
-use spectradb::Database;
+use tensordb::config::Config;
+use tensordb::ledger::internal_key::{encode_internal_key, KIND_PUT};
+use tensordb::ledger::record::{FactMetadata, FactValue, FactWrite};
+use tensordb::storage::wal::Wal;
+use tensordb::Database;
 
 #[test]
 fn wal_replay_recovers_records() {
@@ -24,6 +24,8 @@ fn wal_replay_recovers_records() {
             internal_key: internal,
             fact,
             metadata: FactMetadata::default(),
+            epoch: 0,
+            txn_id: 0,
         })
         .unwrap();
     }

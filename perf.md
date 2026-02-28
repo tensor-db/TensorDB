@@ -31,7 +31,7 @@ cargo bench --bench multi_engine
 cargo bench --bench basic
 
 # CLI-integrated benchmark with configurable workload
-cargo run -p spectradb-cli -- --path /tmp/bench bench \
+cargo run -p tensordb-cli -- --path /tmp/bench bench \
   --write-ops 100000 --read-ops 50000 --keyspace 20000 --read-miss-ratio 0.20
 ```
 
@@ -199,7 +199,7 @@ cargo install flamegraph
 cargo flamegraph --bench comparative
 
 # Memory profiling with heaptrack
-heaptrack cargo run -p spectradb-cli -- --path /tmp/bench bench --write-ops 100000
+heaptrack cargo run -p tensordb-cli -- --path /tmp/bench bench --write-ops 100000
 ```
 
 ---

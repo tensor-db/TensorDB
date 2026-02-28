@@ -1,5 +1,5 @@
-use spectradb::{Config, Database};
 use tempfile::TempDir;
+use tensordb::{Config, Database};
 
 fn open_db(dir: &TempDir) -> Database {
     Database::open(
@@ -36,7 +36,7 @@ fn row_number_over_order_by() {
         .sql("SELECT pk, ROW_NUMBER() OVER (ORDER BY doc.amount ASC) AS rn FROM sales ORDER BY doc.amount ASC")
         .unwrap();
     match result {
-        spectradb_core::sql::exec::SqlResult::Rows(rows) => {
+        tensordb_core::sql::exec::SqlResult::Rows(rows) => {
             assert_eq!(rows.len(), 5);
             // Check that row numbers are 1..5
             for (i, row) in rows.iter().enumerate() {
@@ -58,7 +58,7 @@ fn row_number_with_partition() {
         .sql("SELECT pk, ROW_NUMBER() OVER (PARTITION BY doc.region ORDER BY doc.amount ASC) AS rn FROM sales")
         .unwrap();
     match result {
-        spectradb_core::sql::exec::SqlResult::Rows(rows) => {
+        tensordb_core::sql::exec::SqlResult::Rows(rows) => {
             assert_eq!(rows.len(), 5);
             // Each partition should have sequential row numbers
             for row in &rows {
@@ -89,7 +89,7 @@ fn rank_with_ties() {
         .sql("SELECT pk, RANK() OVER (ORDER BY doc.score ASC) AS rnk FROM scores ORDER BY doc.score ASC")
         .unwrap();
     match result {
-        spectradb_core::sql::exec::SqlResult::Rows(rows) => {
+        tensordb_core::sql::exec::SqlResult::Rows(rows) => {
             assert_eq!(rows.len(), 4);
             let vals: Vec<serde_json::Value> = rows
                 .iter()
@@ -123,7 +123,7 @@ fn dense_rank() {
         .sql("SELECT pk, DENSE_RANK() OVER (ORDER BY doc.score ASC) AS drnk FROM scores ORDER BY doc.score ASC")
         .unwrap();
     match result {
-        spectradb_core::sql::exec::SqlResult::Rows(rows) => {
+        tensordb_core::sql::exec::SqlResult::Rows(rows) => {
             assert_eq!(rows.len(), 4);
             let vals: Vec<serde_json::Value> = rows
                 .iter()

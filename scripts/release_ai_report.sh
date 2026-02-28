@@ -13,7 +13,7 @@ OUT_DIR="${OUT_DIR:-$ROOT/output/release_reports}"
 mkdir -p "$OUT_DIR"
 REPORT_PATH="${REPORT_PATH:-$OUT_DIR/ai_overhead_${STAMP_UTC}.md}"
 
-WORK_DIR="$(mktemp -d /tmp/spectradb-release-ai-report-XXXXXX)"
+WORK_DIR="$(mktemp -d /tmp/tensordb-release-ai-report-XXXXXX)"
 OFF_OUT="$WORK_DIR/bench_ai_off.txt"
 ON_OUT="$WORK_DIR/bench_ai_on.txt"
 
@@ -32,7 +32,7 @@ AI_BATCH_MAX_EVENTS="${AI_BATCH_MAX_EVENTS:-16}"
 run_bench() {
   local out="$1"
   shift
-  (cd "$ROOT" && cargo run -q -p spectradb-cli -- "$@" \
+  (cd "$ROOT" && cargo run -q -p tensordb-cli -- "$@" \
     bench --write-ops "$WRITE_OPS" --read-ops "$READ_OPS" --keyspace "$KEYSPACE" --read-miss-ratio "$READ_MISS_RATIO") > "$out"
 }
 

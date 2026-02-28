@@ -1,8 +1,8 @@
 // Integration tests for v0.23 Authentication & RBAC
-use spectradb_core::auth::rbac::*;
-use spectradb_core::auth::session::*;
-use spectradb_core::config::Config;
-use spectradb_core::engine::db::Database;
+use tensordb_core::auth::rbac::*;
+use tensordb_core::auth::session::*;
+use tensordb_core::config::Config;
+use tensordb_core::engine::db::Database;
 
 fn setup() -> (Database, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();

@@ -1,5 +1,5 @@
 [package]
-name = "spectradb"
+name = "tensordb"
 version = "0.2.0"
 edition = "2021"
 description = "TensorDB — single-node, append-only, bitemporal ledger database with MVCC snapshot reads and SQL facet"
@@ -11,31 +11,31 @@ categories = ["database-implementations"]
 [workspace]
 members = [
   ".",
-  "crates/spectradb-core",
-  "crates/spectradb-native",
-  "crates/spectradb-cli",
-  "crates/spectradb-server",
-  "crates/spectradb-python",
-  "crates/spectradb-node",
+  "crates/tensordb-core",
+  "crates/tensordb-native",
+  "crates/tensordb-cli",
+  "crates/tensordb-server",
+  "crates/tensordb-python",
+  "crates/tensordb-node",
 ]
 default-members = [
   ".",
-  "crates/spectradb-core",
-  "crates/spectradb-cli",
-  "crates/spectradb-server",
+  "crates/tensordb-core",
+  "crates/tensordb-cli",
+  "crates/tensordb-server",
 ]
 resolver = "2"
 
 [features]
 default = ["llm"]
-native = ["spectradb-core/native"]
-simd = ["spectradb-core/simd"]
-io-uring = ["spectradb-core/io-uring"]
-parquet = ["spectradb-core/parquet"]
-llm = ["spectradb-core/llm"]
+native = ["tensordb-core/native"]
+simd = ["tensordb-core/simd"]
+io-uring = ["tensordb-core/io-uring"]
+parquet = ["tensordb-core/parquet"]
+llm = ["tensordb-core/llm"]
 
 [dependencies]
-spectradb-core = { path = "crates/spectradb-core" }
+tensordb-core = { path = "crates/tensordb-core" }
 
 [dev-dependencies]
 criterion = "0.5"

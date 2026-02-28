@@ -1,5 +1,5 @@
-use spectradb::{Config, Database, WriteBatchItem};
 use tempfile::TempDir;
+use tensordb::{Config, Database, WriteBatchItem};
 
 fn open_db(dir: &TempDir) -> Database {
     let config = Config {

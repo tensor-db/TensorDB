@@ -7,7 +7,7 @@ if [ -f "$HOME/.cargo/env" ]; then
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK_DIR="${WORK_DIR:-$(mktemp -d /tmp/spectradb-ai-gate-XXXXXX)}"
+WORK_DIR="${WORK_DIR:-$(mktemp -d /tmp/tensordb-ai-gate-XXXXXX)}"
 mkdir -p "$WORK_DIR"
 
 WRITE_OPS="${WRITE_OPS:-5000}"
@@ -32,7 +32,7 @@ ON_OUT="$WORK_DIR/bench_ai_on.txt"
 run_bench() {
   local out="$1"
   shift
-  (cd "$ROOT" && cargo run -q -p spectradb-cli -- "$@" \
+  (cd "$ROOT" && cargo run -q -p tensordb-cli -- "$@" \
     bench --write-ops "$WRITE_OPS" --read-ops "$READ_OPS" --keyspace "$KEYSPACE" --read-miss-ratio "$READ_MISS_RATIO") > "$out"
 }
 

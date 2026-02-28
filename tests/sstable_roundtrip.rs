@@ -1,9 +1,9 @@
 use tempfile::tempdir;
 
-use spectradb::ledger::internal_key::{encode_internal_key, KIND_PUT};
-use spectradb::ledger::record::FactValue;
-use spectradb::native_bridge::build_hasher;
-use spectradb::storage::sstable::{build_sstable, SsTableReader};
+use tensordb::ledger::internal_key::{encode_internal_key, KIND_PUT};
+use tensordb::ledger::record::FactValue;
+use tensordb::native_bridge::build_hasher;
+use tensordb::storage::sstable::{build_sstable, SsTableReader};
 
 #[test]
 fn sstable_roundtrip_point_reads_and_bloom() {

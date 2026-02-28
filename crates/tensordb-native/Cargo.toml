@@ -1,0 +1,10 @@
+[package]
+name = "tensordb-native"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+cxx = "1"
+
+[build-dependencies]
+cxx-build = "1"

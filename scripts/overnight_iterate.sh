@@ -43,7 +43,7 @@ for i in $(seq 1 "$ROUNDS"); do
 
     echo "[3] bench (rust path)"
     db_path="$round_dir/db"
-    (cd "$ROOT" && cargo run -q -p spectradb-cli -- --path "$db_path" \
+    (cd "$ROOT" && cargo run -q -p tensordb-cli -- --path "$db_path" \
       --shard-count "$SHARD_COUNT" \
       --memtable-max-bytes "$MEMTABLE_MAX_BYTES" \
       --sstable-block-bytes "$SSTABLE_BLOCK_BYTES" \
@@ -55,7 +55,7 @@ for i in $(seq 1 "$ROUNDS"); do
     if [ "$has_cpp" -eq 1 ]; then
       echo "[4] bench (native path)"
       db_native_path="$round_dir/db_native"
-      (cd "$ROOT" && cargo run -q -p spectradb-cli --features native -- --path "$db_native_path" \
+      (cd "$ROOT" && cargo run -q -p tensordb-cli --features native -- --path "$db_native_path" \
         --shard-count "$SHARD_COUNT" \
         --memtable-max-bytes "$MEMTABLE_MAX_BYTES" \
         --sstable-block-bytes "$SSTABLE_BLOCK_BYTES" \
@@ -66,9 +66,9 @@ for i in $(seq 1 "$ROUNDS"); do
     fi
 
     echo "[5] sql smoke"
-    (cd "$ROOT" && cargo run -q -p spectradb-cli -- --path "$db_path" sql "CREATE TABLE nightly (pk TEXT PRIMARY KEY);")
-    (cd "$ROOT" && cargo run -q -p spectradb-cli -- --path "$db_path" sql "INSERT INTO nightly (pk, doc) VALUES ('k', '{\\\"ok\\\":true}');")
-    (cd "$ROOT" && cargo run -q -p spectradb-cli -- --path "$db_path" sql "SELECT doc FROM nightly WHERE pk='k';")
+    (cd "$ROOT" && cargo run -q -p tensordb-cli -- --path "$db_path" sql "CREATE TABLE nightly (pk TEXT PRIMARY KEY);")
+    (cd "$ROOT" && cargo run -q -p tensordb-cli -- --path "$db_path" sql "INSERT INTO nightly (pk, doc) VALUES ('k', '{\\\"ok\\\":true}');")
+    (cd "$ROOT" && cargo run -q -p tensordb-cli -- --path "$db_path" sql "SELECT doc FROM nightly WHERE pk='k';")
   } >"$round_dir/report.txt" 2>&1
 
 done

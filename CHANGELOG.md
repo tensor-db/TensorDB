@@ -27,7 +27,7 @@ All notable changes to TensorDB are documented in this file.
 - `fast_write_enabled` config (default: true) and `fast_write_wal_batch_interval_us` (default: 1000)
 - Automatic fallback to channel path on memtable backpressure or subscriber activity
 - `Database::sync()` for explicit durability flush
-- Channel-path benchmark (`spectradb_point_write_channel`) for comparison
+- Channel-path benchmark (`tensordb_point_write_channel`) for comparison
 
 ### Changed
 - `ShardShared` fields now `pub(crate)` for direct access by fast write path
@@ -134,7 +134,7 @@ All notable changes to TensorDB are documented in this file.
 ## [0.15] — PostgreSQL Wire Protocol
 
 ### Added
-- `spectradb-server` crate with pgwire v3 protocol implementation
+- `tensordb-server` crate with pgwire v3 protocol implementation
 - Simple query mode and extended query mode (Parse/Bind/Describe/Execute/Sync)
 - Type OID mapping (BOOL, INT4, INT8, FLOAT8, TEXT, JSON, JSONB, TIMESTAMP, BYTEA)
 - Password authentication

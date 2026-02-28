@@ -1,5 +1,5 @@
-use spectradb::{Config, Database};
 use tempfile::TempDir;
+use tensordb::{Config, Database};
 
 fn open_db(dir: &TempDir) -> Database {
     Database::open(
@@ -22,7 +22,7 @@ fn typed_create_table_and_insert() {
         .unwrap();
     let result = db.sql("SELECT doc FROM users WHERE pk = 'u1'").unwrap();
     match result {
-        spectradb_core::sql::exec::SqlResult::Rows(rows) => {
+        tensordb_core::sql::exec::SqlResult::Rows(rows) => {
             assert_eq!(rows.len(), 1);
             let doc: serde_json::Value = serde_json::from_slice(&rows[0]).unwrap();
             assert_eq!(doc["name"], "Alice");
@@ -48,7 +48,7 @@ fn typed_insert_select_columns() {
         .sql("SELECT name, price FROM products ORDER BY name ASC")
         .unwrap();
     match result {
-        spectradb_core::sql::exec::SqlResult::Rows(rows) => {
+        tensordb_core::sql::exec::SqlResult::Rows(rows) => {
             assert_eq!(rows.len(), 2);
             let r0: serde_json::Value = serde_json::from_slice(&rows[0]).unwrap();
             assert_eq!(r0["name"], "Gadget");
@@ -77,7 +77,7 @@ fn typed_update_and_delete() {
 
     let result = db.sql("SELECT doc FROM items WHERE pk = 'a'").unwrap();
     match result {
-        spectradb_core::sql::exec::SqlResult::Rows(rows) => {
+        tensordb_core::sql::exec::SqlResult::Rows(rows) => {
             let doc: serde_json::Value = serde_json::from_slice(&rows[0]).unwrap();
             assert_eq!(doc["qty"], 15);
         }
@@ -88,7 +88,7 @@ fn typed_update_and_delete() {
     db.sql("DELETE FROM items WHERE pk = 'b'").unwrap();
     let result = db.sql("SELECT count(*) FROM items").unwrap();
     match result {
-        spectradb_core::sql::exec::SqlResult::Rows(rows) => {
+        tensordb_core::sql::exec::SqlResult::Rows(rows) => {
             assert_eq!(rows.len(), 1);
             assert_eq!(std::str::from_utf8(&rows[0]).unwrap(), "1");
         }

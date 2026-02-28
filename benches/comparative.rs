@@ -1,8 +1,8 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use spectradb::{Config, Database};
 use tempfile::TempDir;
+use tensordb::{Config, Database};
 
-fn bench_spectradb_point_write(c: &mut Criterion) {
+fn bench_tensordb_point_write(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let config = Config {
         shard_count: 4,
@@ -12,7 +12,7 @@ fn bench_spectradb_point_write(c: &mut Criterion) {
     let db = Database::open(dir.path(), config).unwrap();
 
     let mut i = 0u64;
-    c.bench_function("spectradb_point_write", |b| {
+    c.bench_function("tensordb_point_write", |b| {
         b.iter(|| {
             let key = format!("bench/{i:08}");
             let doc = format!("{{\"n\":{i}}}");
@@ -22,7 +22,7 @@ fn bench_spectradb_point_write(c: &mut Criterion) {
     });
 }
 
-fn bench_spectradb_point_write_channel(c: &mut Criterion) {
+fn bench_tensordb_point_write_channel(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let config = Config {
         shard_count: 4,
@@ -32,7 +32,7 @@ fn bench_spectradb_point_write_channel(c: &mut Criterion) {
     let db = Database::open(dir.path(), config).unwrap();
 
     let mut i = 0u64;
-    c.bench_function("spectradb_point_write_channel", |b| {
+    c.bench_function("tensordb_point_write_channel", |b| {
         b.iter(|| {
             let key = format!("bench/{i:08}");
             let doc = format!("{{\"n\":{i}}}");
@@ -42,7 +42,7 @@ fn bench_spectradb_point_write_channel(c: &mut Criterion) {
     });
 }
 
-fn bench_spectradb_point_read(c: &mut Criterion) {
+fn bench_tensordb_point_read(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let config = Config {
         shard_count: 4,
@@ -58,7 +58,7 @@ fn bench_spectradb_point_read(c: &mut Criterion) {
     }
 
     let mut i = 0u64;
-    c.bench_function("spectradb_point_read", |b| {
+    c.bench_function("tensordb_point_read", |b| {
         b.iter(|| {
             let key = format!("bench/{:08}", i % 10_000);
             let _ = db.get(key.as_bytes(), None, None);
@@ -67,7 +67,7 @@ fn bench_spectradb_point_read(c: &mut Criterion) {
     });
 }
 
-fn bench_spectradb_scan(c: &mut Criterion) {
+fn bench_tensordb_scan(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let config = Config {
         shard_count: 4,
@@ -82,14 +82,14 @@ fn bench_spectradb_scan(c: &mut Criterion) {
         let _ = db.put(key.as_bytes(), doc.into_bytes(), 0, u64::MAX, Some(1));
     }
 
-    c.bench_function("spectradb_prefix_scan_1000", |b| {
+    c.bench_function("tensordb_prefix_scan_1000", |b| {
         b.iter(|| {
             let _ = db.scan_prefix(b"scan/", None, None, None);
         })
     });
 }
 
-fn bench_spectradb_sql_select(c: &mut Criterion) {
+fn bench_tensordb_sql_select(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let config = Config {
         shard_count: 2,
@@ -103,7 +103,7 @@ fn bench_spectradb_sql_select(c: &mut Criterion) {
         db.sql(&q).unwrap();
     }
 
-    c.bench_function("spectradb_sql_select_100", |b| {
+    c.bench_function("tensordb_sql_select_100", |b| {
         b.iter(|| {
             let _ = db.sql("SELECT pk, doc FROM bench");
         })
@@ -203,7 +203,7 @@ fn bench_sqlite_scan(c: &mut Criterion) {
     });
 }
 
-fn bench_spectradb_mixed_workload(c: &mut Criterion) {
+fn bench_tensordb_mixed_workload(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let config = Config {
         shard_count: 4,
@@ -219,7 +219,7 @@ fn bench_spectradb_mixed_workload(c: &mut Criterion) {
     }
 
     let mut i = 5_000u64;
-    c.bench_function("spectradb_mixed_80read_20write", |b| {
+    c.bench_function("tensordb_mixed_80read_20write", |b| {
         b.iter(|| {
             if i.is_multiple_of(5) {
                 // 20% writes
@@ -279,15 +279,15 @@ fn bench_sqlite_mixed_workload(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_spectradb_point_write,
-    bench_spectradb_point_write_channel,
+    bench_tensordb_point_write,
+    bench_tensordb_point_write_channel,
     bench_sqlite_point_write,
-    bench_spectradb_point_read,
+    bench_tensordb_point_read,
     bench_sqlite_point_read,
-    bench_spectradb_scan,
+    bench_tensordb_scan,
     bench_sqlite_scan,
-    bench_spectradb_sql_select,
-    bench_spectradb_mixed_workload,
+    bench_tensordb_sql_select,
+    bench_tensordb_mixed_workload,
     bench_sqlite_mixed_workload,
 );
 criterion_main!(benches);

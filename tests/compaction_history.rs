@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use tempfile::tempdir;
 
-use spectradb::config::Config;
-use spectradb::Database;
+use tensordb::config::Config;
+use tensordb::Database;
 
 #[test]
 fn compaction_preserves_multiversion_history() {

@@ -5,9 +5,9 @@
 
 use tempfile::tempdir;
 
-use spectradb::config::Config;
-use spectradb::sql::exec::SqlResult;
-use spectradb::Database;
+use tensordb::config::Config;
+use tensordb::sql::exec::SqlResult;
+use tensordb::Database;
 
 fn setup_db() -> (tempfile::TempDir, Database) {
     let dir = tempdir().unwrap();
@@ -270,7 +270,7 @@ fn time_bucket_gapfill_fills_gaps() {
 
 #[test]
 fn parse_interval_seconds_variants() {
-    use spectradb::sql::eval::parse_interval_seconds;
+    use tensordb::sql::eval::parse_interval_seconds;
 
     assert_eq!(parse_interval_seconds("1s"), Some(1));
     assert_eq!(parse_interval_seconds("30s"), Some(30));

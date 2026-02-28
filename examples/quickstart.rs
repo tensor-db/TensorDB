@@ -5,9 +5,9 @@
 //!
 //! Run with: `cargo run --example quickstart`
 
-use spectradb::{Config, Database};
+use tensordb::{Config, Database};
 
-fn main() -> spectradb::Result<()> {
+fn main() -> tensordb::Result<()> {
     // Create a temporary database directory
     let dir = tempfile::tempdir().expect("failed to create temp dir");
     let db = Database::open(
@@ -102,8 +102,8 @@ fn main() -> spectradb::Result<()> {
 
     // --- 7. Write Batch ---
     println!("7. Write batch...");
-    let items: Vec<spectradb::WriteBatchItem> = (100..110)
-        .map(|i| spectradb::WriteBatchItem {
+    let items: Vec<tensordb::WriteBatchItem> = (100..110)
+        .map(|i| tensordb::WriteBatchItem {
             user_key: format!("batch/key-{i}").into_bytes(),
             doc: format!("{{\"batch_id\":{i}}}").into_bytes(),
             valid_from: 0,
@@ -140,25 +140,25 @@ fn main() -> spectradb::Result<()> {
     Ok(())
 }
 
-fn print_rows(result: &spectradb::sql::exec::SqlResult) {
+fn print_rows(result: &tensordb::sql::exec::SqlResult) {
     match result {
-        spectradb::sql::exec::SqlResult::Rows(rows) => {
+        tensordb::sql::exec::SqlResult::Rows(rows) => {
             for row in rows {
                 println!("     {}", String::from_utf8_lossy(row));
             }
         }
-        spectradb::sql::exec::SqlResult::Affected { message, .. } => {
+        tensordb::sql::exec::SqlResult::Affected { message, .. } => {
             println!("     {message}");
         }
-        spectradb::sql::exec::SqlResult::Explain(text) => {
+        tensordb::sql::exec::SqlResult::Explain(text) => {
             println!("     {text}");
         }
     }
     println!();
 }
 
-fn print_explain(result: &spectradb::sql::exec::SqlResult) {
-    if let spectradb::sql::exec::SqlResult::Explain(text) = result {
+fn print_explain(result: &tensordb::sql::exec::SqlResult) {
+    if let tensordb::sql::exec::SqlResult::Explain(text) = result {
         for line in text.lines() {
             println!("     {line}");
         }

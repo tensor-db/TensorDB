@@ -1,8 +1,8 @@
 use tempfile::tempdir;
 
-use spectradb::config::Config;
-use spectradb::sql::exec::{SqlResult, TableStats};
-use spectradb::{Database, PreparedStatement};
+use tensordb::config::Config;
+use tensordb::sql::exec::{SqlResult, TableStats};
+use tensordb::{Database, PreparedStatement};
 
 fn setup_db() -> (tempfile::TempDir, Database) {
     let dir = tempdir().unwrap();

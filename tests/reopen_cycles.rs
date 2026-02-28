@@ -1,7 +1,7 @@
 use tempfile::tempdir;
 
-use spectradb::config::Config;
-use spectradb::Database;
+use tensordb::config::Config;
+use tensordb::Database;
 
 #[test]
 fn repeated_reopen_cycles_preserve_latest_state() {

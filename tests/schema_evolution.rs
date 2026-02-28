@@ -1,7 +1,7 @@
 // Integration tests for v0.26 Schema Evolution
-use spectradb_core::config::Config;
-use spectradb_core::engine::db::Database;
-use spectradb_core::facet::schema_evolution::*;
+use tensordb_core::config::Config;
+use tensordb_core::engine::db::Database;
+use tensordb_core::facet::schema_evolution::*;
 
 fn setup() -> (Database, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();

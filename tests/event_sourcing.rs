@@ -1,7 +1,7 @@
 // Integration tests for v0.22 Event Sourcing
-use spectradb_core::config::Config;
-use spectradb_core::engine::db::Database;
-use spectradb_core::facet::event_sourcing::*;
+use tensordb_core::config::Config;
+use tensordb_core::engine::db::Database;
+use tensordb_core::facet::event_sourcing::*;
 
 fn setup() -> (Database, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();

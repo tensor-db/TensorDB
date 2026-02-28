@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use spectradb::{Config, Database};
 use tempfile::TempDir;
+use tensordb::{Config, Database};
 
 fn open_ai_db(dir: &TempDir) -> Database {
     let cfg = Config {

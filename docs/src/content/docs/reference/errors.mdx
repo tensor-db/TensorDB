@@ -5,12 +5,12 @@ title: Error Reference
 description: TensorDB error types and handling.
 ---
 
-TensorDB uses the `SpectraError` enum for all error conditions.
+TensorDB uses the `TensorError` enum for all error conditions.
 
 ## Error Types
 
 ```rust
-pub enum SpectraError {
+pub enum TensorError {
     /// I/O errors (disk, WAL, SSTable)
     Io(std::io::Error),
 
@@ -34,12 +34,12 @@ pub enum SpectraError {
 ## Handling Errors
 
 ```rust
-use tensordb::{Database, Config, SpectraError};
+use tensordb::{Database, Config, TensorError};
 
 match db.sql("SELECT * FROM nonexistent", &[]) {
     Ok(results) => println!("{:?}", results),
-    Err(SpectraError::Sql(msg)) => eprintln!("SQL error: {}", msg),
-    Err(SpectraError::Io(e)) => eprintln!("I/O error: {}", e),
+    Err(TensorError::Sql(msg)) => eprintln!("SQL error: {}", msg),
+    Err(TensorError::Io(e)) => eprintln!("I/O error: {}", e),
     Err(e) => eprintln!("Other error: {}", e),
 }
 ```
@@ -57,7 +57,7 @@ match db.sql("SELECT * FROM nonexistent", &[]) {
 ## Result Type
 
 ```rust
-pub type Result<T> = std::result::Result<T, SpectraError>;
+pub type Result<T> = std::result::Result<T, TensorError>;
 ```
 
-All TensorDB functions return `tensordb::Result<T>`, which is an alias for `std::result::Result<T, SpectraError>`.
+All TensorDB functions return `tensordb::Result<T>`, which is an alias for `std::result::Result<T, TensorError>`.

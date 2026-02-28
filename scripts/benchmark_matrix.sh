@@ -39,7 +39,7 @@ run_one() {
             db="$OUT_DIR/db_${mode}_${shard}_${mem}_${block}_${bloom}_${fsync}"
             out="$OUT_DIR/out_${mode}_${shard}_${mem}_${block}_${bloom}_${fsync}.txt"
 
-            (cd "$ROOT" && cargo run -q -p spectradb-cli "${features[@]}" -- \
+            (cd "$ROOT" && cargo run -q -p tensordb-cli "${features[@]}" -- \
               --path "$db" \
               --shard-count "$shard" \
               --memtable-max-bytes "$mem" \

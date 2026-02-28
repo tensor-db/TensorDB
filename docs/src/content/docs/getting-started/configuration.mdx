@@ -76,14 +76,14 @@ config.ai_access_stats_size = 4096;  // Track more keys
 
 ## Validation
 
-TensorDB validates configuration at startup. Invalid configurations return a `SpectraError::Config` error:
+TensorDB validates configuration at startup. Invalid configurations return a `TensorError::Config` error:
 
 ```rust
 let mut config = Config::default();
 config.memtable_max_bytes = 100;  // Too small! Must be >= 1024
 
 match Database::open("data", config) {
-    Err(tensordb::SpectraError::Config(msg)) => {
+    Err(tensordb::TensorError::Config(msg)) => {
         eprintln!("Invalid config: {}", msg);
     }
     _ => {}

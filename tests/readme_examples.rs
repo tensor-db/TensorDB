@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use spectradb::{Config, Database};
 use tempfile::TempDir;
+use tensordb::{Config, Database};
 
 #[test]
 fn readme_quickstart_sql_examples_execute() {

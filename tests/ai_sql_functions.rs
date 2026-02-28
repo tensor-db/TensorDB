@@ -4,9 +4,9 @@
 
 use tempfile::tempdir;
 
-use spectradb::config::Config;
-use spectradb::sql::exec::SqlResult;
-use spectradb::Database;
+use tensordb::config::Config;
+use tensordb::sql::exec::SqlResult;
+use tensordb::Database;
 
 fn setup_ai_db() -> (tempfile::TempDir, Database) {
     let dir = tempdir().unwrap();

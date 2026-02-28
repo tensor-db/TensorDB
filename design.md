@@ -671,7 +671,7 @@ Nodes register under `__cluster/node/<node_id>` with role, status, heartbeat, an
 
 ## PostgreSQL Wire Protocol
 
-The `spectradb-server` crate implements the PostgreSQL v3 wire protocol, allowing any Postgres-compatible client (psql, JDBC, Python's psycopg2, etc.) to connect.
+The `tensordb-server` crate implements the PostgreSQL v3 wire protocol, allowing any Postgres-compatible client (psql, JDBC, Python's psycopg2, etc.) to connect.
 
 **Supported messages:**
 - Startup with parameter negotiation

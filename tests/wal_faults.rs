@@ -2,9 +2,9 @@ use std::fs;
 
 use tempfile::tempdir;
 
-use spectradb::ledger::internal_key::{encode_internal_key, KIND_PUT};
-use spectradb::ledger::record::{FactMetadata, FactValue, FactWrite};
-use spectradb::storage::wal::Wal;
+use tensordb::ledger::internal_key::{encode_internal_key, KIND_PUT};
+use tensordb::ledger::record::{FactMetadata, FactValue, FactWrite};
+use tensordb::storage::wal::Wal;
 
 fn mk_write(k: &str, commit_ts: u64, v: &str) -> FactWrite {
     FactWrite {
@@ -16,6 +16,8 @@ fn mk_write(k: &str, commit_ts: u64, v: &str) -> FactWrite {
         }
         .encode(),
         metadata: FactMetadata::default(),
+        epoch: 0,
+        txn_id: 0,
     }
 }
 
@@ -73,6 +75,8 @@ fn wal_replay_stops_at_mid_file_crc_corruption() {
                 internal_key: vec![b'k', i, 0, 0, 0, 0, 0, 0, 0, i + 1, 0],
                 fact: vec![b'v', i],
                 metadata: FactMetadata::default(),
+                epoch: 0,
+                txn_id: 0,
             };
             wal.append(&write).unwrap();
         }

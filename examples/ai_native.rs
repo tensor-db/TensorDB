@@ -5,9 +5,9 @@
 //!
 //! Run with: `cargo run --example ai_native`
 
-use spectradb::{Config, Database};
+use tensordb::{Config, Database};
 
-fn main() -> spectradb::Result<()> {
+fn main() -> tensordb::Result<()> {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
 
     // Enable AI features
@@ -79,7 +79,7 @@ fn main() -> spectradb::Result<()> {
 
     let result = db.sql("EXPLAIN SELECT doc FROM audit_log;")?;
     println!("   Query plan for full scan:");
-    if let spectradb::sql::exec::SqlResult::Explain(text) = &result {
+    if let tensordb::sql::exec::SqlResult::Explain(text) = &result {
         for line in text.lines() {
             println!("     {line}");
         }
@@ -88,7 +88,7 @@ fn main() -> spectradb::Result<()> {
 
     let result = db.sql("EXPLAIN SELECT doc FROM audit_log WHERE pk='evt-3';")?;
     println!("   Query plan for point lookup:");
-    if let spectradb::sql::exec::SqlResult::Explain(text) = &result {
+    if let tensordb::sql::exec::SqlResult::Explain(text) = &result {
         for line in text.lines() {
             println!("     {line}");
         }
@@ -98,7 +98,7 @@ fn main() -> spectradb::Result<()> {
     // --- 5. EXPLAIN ANALYZE with runtime metrics ---
     let result = db.sql("EXPLAIN ANALYZE SELECT doc FROM audit_log;")?;
     println!("   EXPLAIN ANALYZE output:");
-    if let spectradb::sql::exec::SqlResult::Explain(text) = &result {
+    if let tensordb::sql::exec::SqlResult::Explain(text) = &result {
         for line in text.lines() {
             println!("     {line}");
         }
@@ -108,7 +108,7 @@ fn main() -> spectradb::Result<()> {
     // --- 6. Collect table statistics ---
     println!("5. Table statistics...\n");
     let result = db.sql("ANALYZE audit_log;")?;
-    if let spectradb::sql::exec::SqlResult::Affected { message, .. } = &result {
+    if let tensordb::sql::exec::SqlResult::Affected { message, .. } = &result {
         println!("   {message}");
     }
 

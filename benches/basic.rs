@@ -1,13 +1,13 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use tempfile::tempdir;
 
-use spectradb::{BenchOptions, Config, Database};
+use tensordb::{BenchOptions, Config, Database};
 
 fn bench_basic(c: &mut Criterion) {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path(), Config::default()).unwrap();
 
-    c.bench_function("spectradb_cli_like_bench", |b| {
+    c.bench_function("tensordb_cli_like_bench", |b| {
         b.iter(|| {
             let _ = db
                 .bench(BenchOptions {

@@ -46,12 +46,12 @@ cargo bench --bench multi_engine
 
 | Crate | Purpose |
 |-------|---------|
-| `spectradb-core` | Database engine: storage, SQL, AI runtime, facets (~31k lines) |
-| `spectradb-cli` | Interactive shell with TAB completion and output modes |
-| `spectradb-server` | PostgreSQL wire protocol server (pgwire) |
-| `spectradb-native` | Optional C++ acceleration via cxx (behind `--features native`) |
-| `spectradb-python` | Python bindings via PyO3/maturin |
-| `spectradb-node` | Node.js bindings via napi-rs |
+| `tensordb-core` | Database engine: storage, SQL, AI runtime, facets (~31k lines) |
+| `tensordb-cli` | Interactive shell with TAB completion and output modes |
+| `tensordb-server` | PostgreSQL wire protocol server (pgwire) |
+| `tensordb-native` | Optional C++ acceleration via cxx (behind `--features native`) |
+| `tensordb-python` | Python bindings via PyO3/maturin |
+| `tensordb-node` | Node.js bindings via napi-rs |
 
 Default workspace members: root, core, cli, server. Python and Node crates are excluded from default builds and require their respective build tools (maturin, npm).
 

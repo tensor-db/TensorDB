@@ -6,9 +6,9 @@
 //!
 //! Run with: `cargo run --example bitemporal`
 
-use spectradb::{Config, Database};
+use tensordb::{Config, Database};
 
-fn main() -> spectradb::Result<()> {
+fn main() -> tensordb::Result<()> {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
     let db = Database::open(dir.path(), Config::default())?;
 

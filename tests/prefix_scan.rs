@@ -1,7 +1,7 @@
 use tempfile::tempdir;
 
-use spectradb::config::Config;
-use spectradb::Database;
+use tensordb::config::Config;
+use tensordb::Database;
 
 #[test]
 fn prefix_scan_respects_mvcc_and_valid_at_filters() {
