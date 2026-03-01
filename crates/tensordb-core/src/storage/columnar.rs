@@ -114,6 +114,14 @@ impl TypedValue {
                     "cannot convert {val} to DECIMAL"
                 ))),
             },
+            // VECTOR columns are stored as text (JSON array string) in the columnar format
+            SqlType::Vector { .. } => match val {
+                serde_json::Value::String(s) => Ok(TypedValue::Text(s.clone())),
+                serde_json::Value::Array(_) => Ok(TypedValue::Text(val.to_string())),
+                _ => Err(TensorError::SqlExec(format!(
+                    "cannot convert {val} to VECTOR"
+                ))),
+            },
         }
     }
 }
@@ -235,6 +243,16 @@ pub fn decode_row(data: &[u8], types: &[SqlType]) -> Result<Vec<TypedValue>> {
                 let d = rust_decimal::Decimal::deserialize(bytes);
                 offset += 16;
                 values.push(TypedValue::Decimal(d));
+            }
+            // VECTOR stored as length-prefixed text (same as TEXT)
+            SqlType::Vector { .. } => {
+                let len = varint::decode_u64(data, &mut offset)? as usize;
+                if offset + len > data.len() {
+                    return Err(TensorError::SqlExec("truncated VECTOR".into()));
+                }
+                let s = String::from_utf8_lossy(&data[offset..offset + len]).into_owned();
+                offset += len;
+                values.push(TypedValue::Text(s));
             }
         }
     }

@@ -38,6 +38,8 @@ pub enum TensorError {
     LlmNotAvailable,
     #[error("LLM error: {0}")]
     LlmError(String),
+    #[error("vector error: {0}")]
+    VectorError(String),
 }
 
 pub type Result<T> = std::result::Result<T, TensorError>;

@@ -491,6 +491,22 @@ fn eval_binop(lv: &SqlValue, op: &BinOperator, rv: &SqlValue) -> Result<SqlValue
             let pattern = rv.to_sort_string();
             Ok(SqlValue::Bool(ilike_match(&text, &pattern)))
         }
+        BinOperator::VectorDistance => {
+            // <-> operator: compute vector distance between two vector literals
+            let l_str = lv.to_sort_string();
+            let r_str = rv.to_sort_string();
+            match (
+                crate::facet::vector_persistence::parse_vector_literal(&l_str),
+                crate::facet::vector_persistence::parse_vector_literal(&r_str),
+            ) {
+                (Ok(v1), Ok(v2)) if v1.len() == v2.len() => {
+                    let dist =
+                        crate::facet::vector_search::DistanceMetric::Euclidean.compute(&v1, &v2);
+                    Ok(SqlValue::Number(dist as f64))
+                }
+                _ => Ok(SqlValue::Null),
+            }
+        }
         BinOperator::And | BinOperator::Or => {
             unreachable!("AND/OR handled with short-circuit in eval")
         }
@@ -1246,6 +1262,111 @@ fn eval_scalar_function(name: &str, args: &[Expr], ctx: &mut EvalContext) -> Res
                 };
                 let highlighted = highlight_text(&text, &query);
                 Ok(SqlValue::Text(highlighted))
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        // --- Vector functions ---
+        "VECTOR_DISTANCE" => {
+            // VECTOR_DISTANCE(v1, v2[, metric])
+            if args.len() >= 2 {
+                let v1_str = match ctx.eval(&args[0])? {
+                    SqlValue::Text(s) => s,
+                    _ => return Ok(SqlValue::Null),
+                };
+                let v2_str = match ctx.eval(&args[1])? {
+                    SqlValue::Text(s) => s,
+                    _ => return Ok(SqlValue::Null),
+                };
+                let v1 = crate::facet::vector_persistence::parse_vector_literal(&v1_str)?;
+                let v2 = crate::facet::vector_persistence::parse_vector_literal(&v2_str)?;
+                if v1.len() != v2.len() {
+                    return Err(TensorError::SqlExec(
+                        "VECTOR_DISTANCE: dimension mismatch".to_string(),
+                    ));
+                }
+                let metric_str = if args.len() >= 3 {
+                    match ctx.eval(&args[2])? {
+                        SqlValue::Text(s) => s.to_lowercase(),
+                        _ => "euclidean".to_string(),
+                    }
+                } else {
+                    "euclidean".to_string()
+                };
+                let metric =
+                    crate::facet::vector_ops::VectorSqlBridge::parse_distance_metric(&metric_str)
+                        .unwrap_or(crate::facet::vector_search::DistanceMetric::Euclidean);
+                let dist = metric.compute(&v1, &v2) as f64;
+                Ok(SqlValue::Number(dist))
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "COSINE_SIMILARITY" => {
+            // COSINE_SIMILARITY(v1, v2) -> 1 - cosine_distance
+            if args.len() >= 2 {
+                let v1_str = match ctx.eval(&args[0])? {
+                    SqlValue::Text(s) => s,
+                    _ => return Ok(SqlValue::Null),
+                };
+                let v2_str = match ctx.eval(&args[1])? {
+                    SqlValue::Text(s) => s,
+                    _ => return Ok(SqlValue::Null),
+                };
+                let v1 = crate::facet::vector_persistence::parse_vector_literal(&v1_str)?;
+                let v2 = crate::facet::vector_persistence::parse_vector_literal(&v2_str)?;
+                if v1.len() != v2.len() {
+                    return Err(TensorError::SqlExec(
+                        "COSINE_SIMILARITY: dimension mismatch".to_string(),
+                    ));
+                }
+                let cos_dist =
+                    crate::facet::vector_search::DistanceMetric::Cosine.compute(&v1, &v2);
+                Ok(SqlValue::Number((1.0 - cos_dist) as f64))
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "VECTOR_NORM" => {
+            if let Some(arg) = args.first() {
+                let s = match ctx.eval(arg)? {
+                    SqlValue::Text(s) => s,
+                    _ => return Ok(SqlValue::Null),
+                };
+                let v = crate::facet::vector_persistence::parse_vector_literal(&s)?;
+                let norm: f64 = v
+                    .iter()
+                    .map(|x| (*x as f64) * (*x as f64))
+                    .sum::<f64>()
+                    .sqrt();
+                Ok(SqlValue::Number(norm))
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "VECTOR_DIMS" => {
+            if let Some(arg) = args.first() {
+                let s = match ctx.eval(arg)? {
+                    SqlValue::Text(s) => s,
+                    _ => return Ok(SqlValue::Null),
+                };
+                let v = crate::facet::vector_persistence::parse_vector_literal(&s)?;
+                Ok(SqlValue::Number(v.len() as f64))
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "HYBRID_SCORE" => {
+            // HYBRID_SCORE(vector_distance, text_score, vector_weight, text_weight)
+            if args.len() >= 4 {
+                let vdist = ctx.eval(&args[0])?.to_f64().unwrap_or(f64::MAX);
+                let tscore = ctx.eval(&args[1])?.to_f64().unwrap_or(0.0);
+                let vweight = ctx.eval(&args[2])?.to_f64().unwrap_or(0.5);
+                let tweight = ctx.eval(&args[3])?.to_f64().unwrap_or(0.5);
+                let score = crate::facet::vector_hybrid::compute_hybrid_score(
+                    vdist, tscore, vweight, tweight,
+                );
+                Ok(SqlValue::Number(score))
             } else {
                 Ok(SqlValue::Null)
             }

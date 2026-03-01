@@ -2,6 +2,53 @@
 
 All notable changes to TensorDB are documented in this file.
 
+## [0.30] — Advanced Vector Search, Horizontal Scaling, Ecosystem
+
+### Added
+
+#### Vector Search
+- **`VECTOR(n)` column type** — First-class vector storage with dimension validation
+- **`CREATE VECTOR INDEX ... USING HNSW`** — Configurable HNSW indexes with `m`, `ef_construction`, and `metric` parameters
+- **`CREATE VECTOR INDEX ... USING IVF_PQ`** — IVF-PQ indexes with `nlist`, `nprobe`, `pq_m`, and `pq_bits` parameters
+- **`<->` distance operator** — k-NN search via `ORDER BY embedding <-> '[0.1, ...]' LIMIT k`
+- **`vector_search()` table function** — Direct k-NN search returning pk, distance, score, and rank
+- **`HYBRID_SCORE()` function** — Weighted combination of vector similarity and BM25 text relevance
+- **Temporal vector queries** — `FOR SYSTEM_TIME AS OF` applied to vector search
+- **Vector scalar functions** — `VECTOR_DISTANCE`, `COSINE_SIMILARITY`, `VECTOR_NORM`, `VECTOR_DIMS`
+- **Vector quantization** — FP16 (via `half` crate) and INT8 scalar quantization, PQ codebook with k-means
+- **IVF index** — K-means centroids, cell assignment, nprobe multi-cell search
+- **Vector persistence** — LSM-backed storage under `__vec/` key prefix with automatic index maintenance on INSERT/UPDATE/DELETE
+- **`DROP VECTOR INDEX`** — Clean removal of vector indexes and associated data
+- 18 new integration tests in `tests/vector_search_sql.rs`
+
+#### Horizontal Scaling (`tensordb-distributed` crate)
+- **Shard routing** — Consistent hash ring with virtual nodes for key-to-shard mapping
+- **Distributed database** — `DistributedDatabase` wrapper routing operations to local or remote shards
+- **2PC distributed transactions** — `TxnCoordinator` and `TxnParticipant` with prepare/commit/abort protocol
+- **Durable transaction log** — Append-only JSON WAL (`TxnLog`) for crash recovery of in-doubt transactions
+- **Online shard rebalancing** — `ShardMigrator` state machine (Planning → Freezing → SnapshotStreaming → CatchingUp → Cutover → Complete)
+- **Migration throttling** — Token-bucket `MigrationThrottle` rate limiter for background migration traffic
+- **Gossip discovery** — Seed-based node discovery with membership merge protocol
+- **Phi-accrual failure detector** — `HealthChecker` with adaptive heartbeat-based failure detection
+- **Cluster node management** — `ClusterNode` with peer tracking, shard ownership, role management
+- gRPC service definitions in `proto/tensor_cluster.proto` (ready for tonic integration)
+- 25 unit tests across all distributed modules
+
+#### Ecosystem
+- **Dockerfile** — Multi-stage build producing minimal tensordb-server image (no LLM)
+- **docker-compose.yml** — Ready-to-use setup with volume mount, healthcheck, port mapping
+- **GitHub Actions: publish-crates.yml** — Automated crates.io publishing on release
+- **GitHub Actions: publish-docker.yml** — Automated Docker image publishing to ghcr.io on release
+- **FastAPI example app** — `examples/fastapi_app/app.py` with CRUD endpoints and vector search
+- **Express.js example app** — `examples/express_app/index.js` with CRUD endpoints
+
+### Changed
+- `VectorError(String)` variant added to `TensorError` enum
+- Vector config defaults added: `vector_hnsw_m`, `vector_hnsw_ef_construction`, `vector_ivf_threshold`, `vector_default_encoding`
+- `SqlType::Vector { dims }` variant added to SQL type system
+- `ColumnVector::Vector` variant added to vectorized batch engine
+- `PlanNode::VectorSearch` variant added to query planner
+
 ## [0.29] — EOAC Architecture: Transactions, PITR, Incremental Backup
 
 ### Added

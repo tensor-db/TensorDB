@@ -78,6 +78,8 @@ pub enum BinOperator {
     Mul,
     Div,
     Mod,
+    /// `<->` vector distance operator
+    VectorDistance,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -182,6 +184,19 @@ pub enum Statement {
     },
     /// `DROP FULLTEXT INDEX <name> ON <table>`
     DropFulltextIndex {
+        index: String,
+        table: String,
+    },
+    /// `CREATE VECTOR INDEX <name> ON <table> (<column>) USING HNSW|IVF_PQ WITH (...)`
+    CreateVectorIndex {
+        index: String,
+        table: String,
+        column: String,
+        index_type: VectorIndexType,
+        params: Vec<(String, String)>,
+    },
+    /// `DROP VECTOR INDEX <name> ON <table>`
+    DropVectorIndex {
         index: String,
         table: String,
     },
@@ -320,7 +335,14 @@ pub enum SqlType {
     Boolean,
     Blob,
     Json,
-    Decimal { precision: u8, scale: u8 },
+    Decimal {
+        precision: u8,
+        scale: u8,
+    },
+    /// Fixed-dimension vector column: `VECTOR(384)`.
+    Vector {
+        dims: u16,
+    },
 }
 
 impl SqlType {
@@ -336,6 +358,9 @@ impl SqlType {
                 precision: 38,
                 scale: 10,
             }),
+            // VECTOR requires parenthesized dimensions, handled by the parser;
+            // bare "VECTOR" defaults to dims=0 as a sentinel (parser fills it in).
+            "VECTOR" => Some(SqlType::Vector { dims: 0 }),
             _ => None,
         }
     }
@@ -349,6 +374,7 @@ impl SqlType {
             SqlType::Blob => "BLOB",
             SqlType::Json => "JSON",
             SqlType::Decimal { .. } => "DECIMAL",
+            SqlType::Vector { .. } => "VECTOR",
         }
     }
 }
@@ -375,6 +401,12 @@ pub enum CopyFormat {
     Parquet,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorIndexType {
+    Hnsw,
+    IvfPq,
+}
+
 // Legacy re-exports for backward compatibility
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectProjection {
@@ -391,9 +423,10 @@ enum Token {
     StringLit(String),
     Symbol(char),
     // Multi-char operators
-    NotEq, // !=
-    LtEq,  // <=
-    GtEq,  // >=
+    NotEq,          // !=
+    LtEq,           // <=
+    GtEq,           // >=
+    VectorDistance, // <->
 }
 
 pub fn parse_sql(input: &str) -> Result<Statement> {
@@ -605,6 +638,9 @@ impl Parser {
         if self.peek_kw("VIEW") {
             return self.parse_create_view_after_create();
         }
+        if self.peek_kw("VECTOR") {
+            return self.parse_create_vector_index();
+        }
         if self.peek_kw("FULLTEXT") {
             return self.parse_create_fulltext_index();
         }
@@ -616,7 +652,7 @@ impl Parser {
             return self.parse_create_index_after_create(false);
         }
         Err(TensorError::SqlParse(
-            "expected TABLE, TIMESERIES TABLE, VIEW, FULLTEXT INDEX, UNIQUE INDEX, or INDEX after CREATE"
+            "expected TABLE, TIMESERIES TABLE, VIEW, VECTOR INDEX, FULLTEXT INDEX, UNIQUE INDEX, or INDEX after CREATE"
                 .to_string(),
         ))
     }
@@ -647,7 +683,7 @@ impl Parser {
                 TensorError::SqlParse(format!("unknown column type: {type_name_str}"))
             })?;
 
-            // Handle DECIMAL(precision, scale) / NUMERIC(p,s) / VARCHAR(n) syntax
+            // Handle DECIMAL(precision, scale) / NUMERIC(p,s) / VECTOR(dims) / VARCHAR(n) syntax
             if matches!(type_name, SqlType::Decimal { .. }) && self.peek_symbol('(') {
                 self.expect_symbol('(')?;
                 let precision = self.expect_number_u64()? as u8;
@@ -659,6 +695,16 @@ impl Parser {
                 };
                 self.expect_symbol(')')?;
                 type_name = SqlType::Decimal { precision, scale };
+            } else if matches!(type_name, SqlType::Vector { .. }) && self.peek_symbol('(') {
+                self.expect_symbol('(')?;
+                let dims = self.expect_number_u64()? as u16;
+                if dims == 0 {
+                    return Err(TensorError::SqlParse(
+                        "VECTOR dimensions must be > 0".to_string(),
+                    ));
+                }
+                self.expect_symbol(')')?;
+                type_name = SqlType::Vector { dims };
             } else if self.peek_symbol('(') {
                 // Skip size specifiers for VARCHAR(n) etc.
                 self.expect_symbol('(')?;
@@ -786,6 +832,75 @@ impl Parser {
             index,
             table,
             columns,
+        })
+    }
+
+    /// Parse `CREATE VECTOR INDEX <name> ON <table> (<column>) USING HNSW|IVF_PQ [WITH (...)]`
+    fn parse_create_vector_index(&mut self) -> Result<Statement> {
+        self.expect_kw("VECTOR")?;
+        self.expect_kw("INDEX")?;
+        let index = self.expect_ident()?;
+        self.expect_kw("ON")?;
+        let table = self.expect_ident()?;
+        self.expect_symbol('(')?;
+        let column = self.expect_ident()?;
+        self.expect_symbol(')')?;
+
+        // Parse optional USING clause
+        let index_type = if self.peek_kw("USING") {
+            self.expect_kw("USING")?;
+            let type_name = self.expect_ident()?;
+            match type_name.to_uppercase().as_str() {
+                "HNSW" => VectorIndexType::Hnsw,
+                "IVF_PQ" => VectorIndexType::IvfPq,
+                _ => {
+                    return Err(TensorError::SqlParse(format!(
+                        "unknown vector index type: {type_name}, expected HNSW or IVF_PQ"
+                    )))
+                }
+            }
+        } else {
+            VectorIndexType::Hnsw
+        };
+
+        // Parse optional WITH (key = 'value', ...)
+        let mut params = Vec::new();
+        if self.peek_kw("WITH") {
+            self.expect_kw("WITH")?;
+            self.expect_symbol('(')?;
+            loop {
+                let key = self.expect_ident()?;
+                self.expect_symbol('=')?;
+                // Accept either string literal or number
+                let val = if let Some(Token::StringLit(_)) = self.toks.get(self.i) {
+                    self.expect_string()?
+                } else if let Some(Token::Number(_)) = self.toks.get(self.i) {
+                    let n = self.expect_number_f64()?;
+                    // Format without trailing zeros for integers
+                    if n == n.floor() {
+                        format!("{}", n as i64)
+                    } else {
+                        format!("{n}")
+                    }
+                } else {
+                    // Try as identifier (for metric names like cosine, euclidean)
+                    self.expect_ident()?
+                };
+                params.push((key.to_lowercase(), val));
+                if !self.peek_symbol(',') {
+                    break;
+                }
+                self.expect_symbol(',')?;
+            }
+            self.expect_symbol(')')?;
+        }
+
+        Ok(Statement::CreateVectorIndex {
+            index,
+            table,
+            column,
+            index_type,
+            params,
         })
     }
 
@@ -1662,6 +1777,17 @@ impl Parser {
             });
         }
 
+        // Vector distance operator <->
+        if matches!(self.toks.get(self.i), Some(Token::VectorDistance)) {
+            self.i += 1;
+            let right = self.parse_addition()?;
+            return Ok(Expr::BinOp {
+                left: Box::new(left),
+                op: BinOperator::VectorDistance,
+                right: Box::new(right),
+            });
+        }
+
         // Standard comparison operators
         if let Some(op) = self.peek_comparison_op() {
             self.consume_comparison_op()?;
@@ -2023,6 +2149,14 @@ impl Parser {
             let view = self.expect_ident()?;
             return Ok(Statement::DropView { view });
         }
+        if self.peek_kw("VECTOR") {
+            self.expect_kw("VECTOR")?;
+            self.expect_kw("INDEX")?;
+            let index = self.expect_ident()?;
+            self.expect_kw("ON")?;
+            let table = self.expect_ident()?;
+            return Ok(Statement::DropVectorIndex { index, table });
+        }
         if self.peek_kw("FULLTEXT") {
             self.expect_kw("FULLTEXT")?;
             self.expect_kw("INDEX")?;
@@ -2039,7 +2173,7 @@ impl Parser {
             return Ok(Statement::DropIndex { index, table });
         }
         Err(TensorError::SqlParse(
-            "expected TABLE, VIEW, FULLTEXT INDEX, or INDEX after DROP".to_string(),
+            "expected TABLE, VIEW, VECTOR INDEX, FULLTEXT INDEX, or INDEX after DROP".to_string(),
         ))
     }
 
@@ -2390,6 +2524,12 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
         if c == '!' && i + 1 < chars.len() && chars[i + 1] == '=' {
             out.push(Token::NotEq);
             i += 2;
+            continue;
+        }
+        // <-> vector distance operator (must check before <= and <>)
+        if c == '<' && i + 2 < chars.len() && chars[i + 1] == '-' && chars[i + 2] == '>' {
+            out.push(Token::VectorDistance);
+            i += 3;
             continue;
         }
         if c == '<' && i + 1 < chars.len() && chars[i + 1] == '=' {

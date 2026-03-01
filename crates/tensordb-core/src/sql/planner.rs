@@ -85,6 +85,14 @@ pub enum PlanNode {
         child: Box<PlanNode>,
         column_count: usize,
     },
+    /// Vector similarity search using HNSW or IVF-PQ index
+    VectorSearch {
+        table: String,
+        column: String,
+        k: u64,
+        metric: String,
+        estimated_cost: f64,
+    },
 }
 
 impl PlanNode {
@@ -103,6 +111,7 @@ impl PlanNode {
             PlanNode::Sort { estimated_cost, .. } => *estimated_cost,
             PlanNode::Limit { child, .. } => child.cost(),
             PlanNode::Project { child, .. } => child.cost(),
+            PlanNode::VectorSearch { estimated_cost, .. } => *estimated_cost,
         }
     }
 
@@ -205,6 +214,15 @@ impl PlanNode {
             } => format!(
                 "{pad}Project cols={column_count}\n{}",
                 child.display(indent + 1)
+            ),
+            PlanNode::VectorSearch {
+                table,
+                column,
+                k,
+                metric,
+                estimated_cost,
+            } => format!(
+                "{pad}VectorSearch table={table} column={column} k={k} metric={metric} cost={estimated_cost:.1}"
             ),
         }
     }

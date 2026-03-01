@@ -38,6 +38,15 @@ pub struct Config {
     pub encryption_passphrase: Option<String>,
     /// Path to a key file (32 raw bytes or 64 hex chars). Alternative to passphrase.
     pub encryption_key_file: Option<String>,
+    // Vector search
+    /// HNSW max connections per node (default: 16).
+    pub vector_hnsw_m: usize,
+    /// HNSW ef_construction parameter (default: 200).
+    pub vector_hnsw_ef_construction: usize,
+    /// Vector count threshold above which IVF index is recommended (default: 10_000).
+    pub vector_ivf_threshold: usize,
+    /// Default vector encoding: "f32", "f16", or "int8" (default: "f32").
+    pub vector_default_encoding: String,
 }
 
 impl Default for Config {
@@ -69,6 +78,10 @@ impl Default for Config {
             llm_max_tokens: 256,
             encryption_passphrase: None,
             encryption_key_file: None,
+            vector_hnsw_m: 16,
+            vector_hnsw_ef_construction: 200,
+            vector_ivf_threshold: 10_000,
+            vector_default_encoding: "f32".to_string(),
         }
     }
 }

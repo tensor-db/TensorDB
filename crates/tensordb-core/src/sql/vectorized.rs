@@ -24,6 +24,8 @@ pub enum ColumnType {
     Float64,
     Boolean,
     Utf8,
+    /// Fixed-dimension vector of f32 values.
+    Vector,
 }
 
 /// A column vector holding typed data with null tracking.
@@ -45,6 +47,11 @@ pub enum ColumnVector {
         values: Vec<String>,
         nulls: Vec<bool>,
     },
+    /// Vector column: each value is a Vec<f32>.
+    Vector {
+        values: Vec<Vec<f32>>,
+        nulls: Vec<bool>,
+    },
 }
 
 impl ColumnVector {
@@ -54,6 +61,7 @@ impl ColumnVector {
             ColumnVector::Float64 { values, .. } => values.len(),
             ColumnVector::Boolean { values, .. } => values.len(),
             ColumnVector::Utf8 { values, .. } => values.len(),
+            ColumnVector::Vector { values, .. } => values.len(),
         }
     }
 
@@ -67,6 +75,7 @@ impl ColumnVector {
             ColumnVector::Float64 { nulls, .. } => nulls,
             ColumnVector::Boolean { nulls, .. } => nulls,
             ColumnVector::Utf8 { nulls, .. } => nulls,
+            ColumnVector::Vector { nulls, .. } => nulls,
         }
     }
 
@@ -80,6 +89,7 @@ impl ColumnVector {
             ColumnVector::Float64 { .. } => ColumnType::Float64,
             ColumnVector::Boolean { .. } => ColumnType::Boolean,
             ColumnVector::Utf8 { .. } => ColumnType::Utf8,
+            ColumnVector::Vector { .. } => ColumnType::Vector,
         }
     }
 
@@ -93,6 +103,7 @@ impl ColumnVector {
             ColumnVector::Float64 { values, .. } => Some(values[idx]),
             ColumnVector::Boolean { values, .. } => Some(if values[idx] { 1.0 } else { 0.0 }),
             ColumnVector::Utf8 { values, .. } => values[idx].parse::<f64>().ok(),
+            ColumnVector::Vector { .. } => None,
         }
     }
 
@@ -106,6 +117,9 @@ impl ColumnVector {
             ColumnVector::Float64 { values, .. } => Some(values[idx].to_string()),
             ColumnVector::Boolean { values, .. } => Some(values[idx].to_string()),
             ColumnVector::Utf8 { values, .. } => Some(values[idx].clone()),
+            ColumnVector::Vector { values, .. } => Some(
+                crate::facet::vector_persistence::format_vector(&values[idx]),
+            ),
         }
     }
 
@@ -121,6 +135,11 @@ impl ColumnVector {
                 .unwrap_or(serde_json::Value::Null),
             ColumnVector::Boolean { values, .. } => serde_json::json!(values[idx]),
             ColumnVector::Utf8 { values, .. } => serde_json::json!(values[idx]),
+            ColumnVector::Vector { values, .. } => {
+                serde_json::json!(crate::facet::vector_persistence::format_vector(
+                    &values[idx]
+                ))
+            }
         }
     }
 
@@ -140,6 +159,10 @@ impl ColumnVector {
                 nulls: Vec::new(),
             },
             ColumnType::Utf8 => ColumnVector::Utf8 {
+                values: Vec::new(),
+                nulls: Vec::new(),
+            },
+            ColumnType::Vector => ColumnVector::Vector {
                 values: Vec::new(),
                 nulls: Vec::new(),
             },
@@ -194,6 +217,33 @@ impl ColumnVector {
                     nulls.push(false);
                 }
             }
+            ColumnVector::Vector { values, nulls } => {
+                if val.is_null() {
+                    values.push(Vec::new());
+                    nulls.push(true);
+                } else if let Some(s) = val.as_str() {
+                    match crate::facet::vector_persistence::parse_vector_literal(s) {
+                        Ok(v) => {
+                            values.push(v);
+                            nulls.push(false);
+                        }
+                        Err(_) => {
+                            values.push(Vec::new());
+                            nulls.push(true);
+                        }
+                    }
+                } else if let Some(arr) = val.as_array() {
+                    let v: Vec<f32> = arr
+                        .iter()
+                        .filter_map(|x| x.as_f64().map(|f| f as f32))
+                        .collect();
+                    values.push(v);
+                    nulls.push(false);
+                } else {
+                    values.push(Vec::new());
+                    nulls.push(true);
+                }
+            }
         }
     }
 
@@ -213,6 +263,10 @@ impl ColumnVector {
                 nulls: indices.iter().map(|&i| nulls[i]).collect(),
             },
             ColumnVector::Utf8 { values, nulls } => ColumnVector::Utf8 {
+                values: indices.iter().map(|&i| values[i].clone()).collect(),
+                nulls: indices.iter().map(|&i| nulls[i]).collect(),
+            },
+            ColumnVector::Vector { values, nulls } => ColumnVector::Vector {
                 values: indices.iter().map(|&i| values[i].clone()).collect(),
                 nulls: indices.iter().map(|&i| nulls[i]).collect(),
             },
@@ -391,6 +445,9 @@ pub fn eval_column_comparison(
                 }
             }
         }
+        ColumnVector::Vector { .. } => {
+            // Vector comparison not meaningful for scalar ops
+        }
     }
 
     result
@@ -520,6 +577,9 @@ pub fn vectorized_sort(
                     }
                 }
             });
+        }
+        ColumnVector::Vector { .. } => {
+            // Vectors cannot be meaningfully sorted; leave in original order
         }
     }
 

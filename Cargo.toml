@@ -15,6 +15,7 @@ members = [
   "crates/tensordb-native",
   "crates/tensordb-cli",
   "crates/tensordb-server",
+  "crates/tensordb-distributed",
   "crates/tensordb-python",
   "crates/tensordb-node",
 ]

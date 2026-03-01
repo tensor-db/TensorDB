@@ -1,0 +1,264 @@
+syntax = "proto3";
+
+package tensor_cluster;
+
+// ── Cluster lifecycle ─────────────────────────────────────────────────────
+
+service TensorCluster {
+  // Key-value operations (forwarded to owning shard)
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc PrefixScan(PrefixScanRequest) returns (PrefixScanResponse);
+  rpc WriteBatch(WriteBatchRequest) returns (WriteBatchResponse);
+
+  // SQL execution (forwarded or scatter-gathered)
+  rpc ExecuteSql(SqlRequest) returns (SqlResponse);
+  rpc ScatterQuery(ScatterRequest) returns (ScatterResponse);
+
+  // Distributed transactions (2PC)
+  rpc Prepare(PrepareRequest) returns (PrepareResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc Abort(AbortRequest) returns (AbortResponse);
+
+  // Shard migration
+  rpc StreamShardData(stream ShardDataChunk) returns (StreamShardResponse);
+  rpc FreezeShard(FreezeShardRequest) returns (FreezeShardResponse);
+  rpc NotifyMigrationComplete(MigrationCompleteRequest) returns (MigrationCompleteResponse);
+
+  // Cluster membership
+  rpc JoinCluster(JoinRequest) returns (JoinResponse);
+  rpc LeaveCluster(LeaveRequest) returns (LeaveResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Raft consensus (over network)
+  rpc RequestVote(VoteRequest) returns (VoteResponse);
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+}
+
+// ── Key-value ops ─────────────────────────────────────────────────────────
+
+message PutRequest {
+  bytes key = 1;
+  bytes value = 2;
+  uint64 valid_from = 3;
+  uint64 valid_to = 4;
+}
+
+message PutResponse {
+  bool success = 1;
+  uint64 commit_ts = 2;
+  string error = 3;
+}
+
+message GetRequest {
+  bytes key = 1;
+  optional uint64 as_of = 2;
+}
+
+message GetResponse {
+  bool found = 1;
+  bytes value = 2;
+  uint64 commit_ts = 3;
+  string error = 4;
+}
+
+message PrefixScanRequest {
+  bytes prefix = 1;
+  optional uint64 as_of = 2;
+  uint32 limit = 3;
+}
+
+message PrefixScanResponse {
+  repeated ScanRow rows = 1;
+  string error = 2;
+}
+
+message ScanRow {
+  bytes key = 1;
+  bytes value = 2;
+  uint64 commit_ts = 3;
+}
+
+message WriteBatchRequest {
+  repeated PutRequest puts = 1;
+  string txn_id = 2;
+}
+
+message WriteBatchResponse {
+  bool success = 1;
+  uint64 commit_ts = 2;
+  string error = 3;
+}
+
+// ── SQL execution ─────────────────────────────────────────────────────────
+
+message SqlRequest {
+  string sql = 1;
+  optional uint64 as_of = 2;
+}
+
+message SqlResponse {
+  bool success = 1;
+  repeated bytes rows = 2;
+  uint64 affected_rows = 3;
+  string message = 4;
+  string error = 5;
+}
+
+message ScatterRequest {
+  string sql = 1;
+  repeated uint32 target_shards = 2;
+}
+
+message ScatterResponse {
+  repeated SqlResponse partial_results = 1;
+  string error = 2;
+}
+
+// ── Distributed transactions ──────────────────────────────────────────────
+
+message PrepareRequest {
+  string txn_id = 1;
+  uint64 epoch = 2;
+  repeated PutRequest writes = 3;
+}
+
+message PrepareResponse {
+  bool prepared = 1;
+  uint64 prepare_ts = 2;
+  string error = 3;
+}
+
+message CommitRequest {
+  string txn_id = 1;
+  uint64 epoch = 2;
+}
+
+message CommitResponse {
+  bool committed = 1;
+  string error = 2;
+}
+
+message AbortRequest {
+  string txn_id = 1;
+}
+
+message AbortResponse {
+  bool aborted = 1;
+  string error = 2;
+}
+
+// ── Shard migration ───────────────────────────────────────────────────────
+
+message ShardDataChunk {
+  uint32 shard_id = 1;
+  bytes data = 2;
+  uint64 sequence = 3;
+  bool is_last = 4;
+}
+
+message StreamShardResponse {
+  bool success = 1;
+  uint64 bytes_received = 2;
+  string error = 3;
+}
+
+message FreezeShardRequest {
+  uint32 shard_id = 1;
+}
+
+message FreezeShardResponse {
+  bool frozen = 1;
+  uint64 last_epoch = 2;
+  string error = 3;
+}
+
+message MigrationCompleteRequest {
+  uint32 shard_id = 1;
+  string new_owner = 2;
+  uint64 epoch = 3;
+}
+
+message MigrationCompleteResponse {
+  bool acknowledged = 1;
+  string error = 2;
+}
+
+// ── Cluster membership ────────────────────────────────────────────────────
+
+message JoinRequest {
+  string node_id = 1;
+  string address = 2;
+  repeated uint32 shard_ids = 3;
+}
+
+message JoinResponse {
+  bool accepted = 1;
+  string leader_id = 2;
+  repeated NodeInfo cluster_nodes = 3;
+  string error = 4;
+}
+
+message LeaveRequest {
+  string node_id = 1;
+  bool graceful = 2;
+}
+
+message LeaveResponse {
+  bool acknowledged = 1;
+  string error = 2;
+}
+
+message HeartbeatRequest {
+  string node_id = 1;
+  uint64 epoch = 2;
+  uint32 shard_count = 3;
+}
+
+message HeartbeatResponse {
+  bool healthy = 1;
+  uint64 leader_epoch = 2;
+}
+
+message NodeInfo {
+  string node_id = 1;
+  string address = 2;
+  repeated uint32 shard_ids = 3;
+  string role = 4; // "leader", "follower", "candidate"
+}
+
+// ── Raft consensus ────────────────────────────────────────────────────────
+
+message VoteRequest {
+  uint64 term = 1;
+  string candidate_id = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
+}
+
+message VoteResponse {
+  uint64 term = 1;
+  bool vote_granted = 2;
+}
+
+message AppendEntriesRequest {
+  uint64 term = 1;
+  string leader_id = 2;
+  uint64 prev_log_index = 3;
+  uint64 prev_log_term = 4;
+  repeated LogEntry entries = 5;
+  uint64 leader_commit = 6;
+}
+
+message AppendEntriesResponse {
+  uint64 term = 1;
+  bool success = 2;
+  uint64 match_index = 3;
+}
+
+message LogEntry {
+  uint64 term = 1;
+  uint64 index = 2;
+  bytes data = 3;
+  string entry_type = 4; // "normal", "config_change", "noop"
+}

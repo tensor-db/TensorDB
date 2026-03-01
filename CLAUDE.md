@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build (pure Rust, default features include llm)
 cargo build
 
-# Run all tests (~698 tests across 33 suites)
+# Run all tests (~740 tests across 35 suites)
 cargo test --workspace --all-targets
 
 # Run a single test suite
@@ -54,7 +54,7 @@ cd docs && npm install && npm run dev   # http://localhost:4321
 
 ## Workspace Structure
 
-7-crate Rust workspace. Default members: root, core, cli, server. Python and Node crates require their respective build tools.
+8-crate Rust workspace. Default members: root, core, cli, server. Python and Node crates require their respective build tools. Distributed crate is feature-gated.
 
 | Crate | Purpose |
 |-------|---------|
@@ -63,6 +63,7 @@ cd docs && npm install && npm run dev   # http://localhost:4321
 | `tensordb-cli` | Interactive shell (rustyline, clap) |
 | `tensordb-server` | PostgreSQL wire protocol server (tokio, pgwire v3) |
 | `tensordb-native` | Optional C++ acceleration via cxx (behind `--features native`) |
+| `tensordb-distributed` | Horizontal scaling: shard routing, 2PC transactions, rebalancing |
 | `tensordb-python` | Python bindings (PyO3/maturin) |
 | `tensordb-node` | Node.js bindings (napi-rs) |
 
@@ -78,7 +79,7 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 
 1. **Client Layer** — Rust API, CLI, Python/PyO3, Node.js/napi-rs, pgwire server
 2. **SQL Engine** (`crates/tensordb-core/src/sql/`) — Hand-written recursive descent parser, cost-based planner with `PlanNode` variants (PointLookup, PrefixScan, IndexScan, FullScan, HashJoin, etc.), executor, and vectorized batch engine (1024-row batches with typed column vectors)
-3. **Facet Layer** (`crates/tensordb-core/src/facet/`) — Specialized engines: relational (typed tables/views/indexes), full-text search (BM25), time-series (bucketing/gap-fill), vector search (HNSW), event sourcing
+3. **Facet Layer** (`crates/tensordb-core/src/facet/`) — Specialized engines: relational (typed tables/views/indexes), full-text search (BM25), time-series (bucketing/gap-fill), vector search (HNSW/IVF-PQ with persistence, hybrid search, temporal vectors, quantization), event sourcing
 4. **Shard Engine** (`crates/tensordb-core/src/engine/`) — Database owns N shards (default 4). Fast write path (~1.9us lock-free) bypasses channels; direct reads (~276ns) bypass shard actors via `ShardReadHandle`
 5. **Storage Engine** (`crates/tensordb-core/src/storage/`) — LSM-tree: WAL (CRC-framed) -> Memtable (BTreeMap) -> SSTables (LZ4 compressed, bloom filters) -> L0-L6 compaction
 
@@ -97,6 +98,9 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 - `__meta/index/{table}/{name}` — Index metadata
 - `__meta/ts_table/{name}` — Time-series metadata
 - `__meta/fts_index/{table}/{name}` — Full-text search index metadata
+- `__meta/vector_index/{table}/{column}` — Vector index metadata (HNSW/IVF-PQ params)
+- `__vec/{table}/{column}/{pk}` — Vector data (raw f32 bytes)
+- `__vec_idx/{table}/{column}/...` — Vector index structures (HNSW graph, IVF centroids, PQ codebook)
 - `__ai/insight/{hex_key}/{commit_ts}` — AI-generated insights
 - `__ai/correlation/{cluster_id}/{commit_ts}/{hex_key}` — AI correlation refs
 

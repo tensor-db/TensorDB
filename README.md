@@ -59,6 +59,10 @@ cargo run -p tensordb-cli -- --path ./mydb
 
 # PostgreSQL wire protocol server
 cargo run -p tensordb-server -- --data-dir ./mydb --port 5433
+
+# Docker
+docker compose up -d
+psql -h localhost -p 5433
 ```
 
 ## Quickstart
@@ -96,6 +100,19 @@ COMMIT;
 -- Full-text search
 CREATE FULLTEXT INDEX idx_docs ON events (doc);
 SELECT pk, HIGHLIGHT(doc, 'signup') FROM events WHERE MATCH(doc, 'signup');
+
+-- Vector search: VECTOR(n) columns, HNSW/IVF-PQ indexes, k-NN via <-> operator
+CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT, embedding VECTOR(384));
+CREATE VECTOR INDEX idx ON docs (embedding) USING HNSW WITH (m = 32, ef_construction = 200, metric = 'cosine');
+INSERT INTO docs (id, title, embedding) VALUES (1, 'intro', '[0.1, 0.2, 0.3, ...]');
+SELECT id, title, embedding <-> '[0.1, 0.2, ...]' AS distance FROM docs ORDER BY distance LIMIT 10;
+
+-- Hybrid search: combine vector similarity with BM25 text relevance
+SELECT id, HYBRID_SCORE(embedding <-> '[0.1, ...]', MATCH(body, 'quantum'), 0.7, 0.3) AS score
+FROM docs WHERE MATCH(body, 'quantum') ORDER BY score DESC LIMIT 10;
+
+-- Vector search table function
+SELECT * FROM vector_search('docs', 'embedding', '[0.1, 0.2, ...]', 10);
 
 -- Time-series
 CREATE TIMESERIES TABLE metrics (ts TIMESTAMP, value REAL) WITH (bucket_size = '1h');
@@ -141,7 +158,7 @@ cargo run --example ai_native      # AI runtime: insights, risk scoring, query p
 ### Specialized Engines
 - **Full-Text Search** — `CREATE FULLTEXT INDEX`, `MATCH()`, `HIGHLIGHT()`, BM25 ranking, multi-column with per-column boosting.
 - **Time-Series** — `CREATE TIMESERIES TABLE`, `TIME_BUCKET()`, gap filling (`LOCF`, `INTERPOLATE`), `DELTA()`, `RATE()`.
-- **Vector Search** — HNSW approximate nearest neighbor, cosine/Euclidean/dot-product distance, `VectorIndex` API.
+- **Vector Search** — `VECTOR(n)` column type, HNSW and IVF-PQ indexes, `<->` distance operator, `vector_search()` table function, hybrid search (vector + BM25 via `HYBRID_SCORE`), temporal vector queries, cosine/Euclidean/dot-product distance, FP16/INT8 quantization.
 - **Event Sourcing** — Aggregate projections, snapshot support, idempotency keys, cross-aggregate event queries.
 - **Schema Evolution** — Migration manager with versioned SQL migrations, schema diff, rollback support.
 
@@ -387,6 +404,12 @@ graph TB
 </details>
 
 <details>
+<summary><strong>Vector Search Functions (5)</strong></summary>
+
+`VECTOR_DISTANCE(v1, v2, metric)`, `COSINE_SIMILARITY(v1, v2)`, `VECTOR_NORM(v)`, `VECTOR_DIMS(v)`, `HYBRID_SCORE(vector_dist, bm25_score, vector_weight, text_weight)`
+</details>
+
+<details>
 <summary><strong>Conditional & Utility (7)</strong></summary>
 
 `COALESCE`, `NULLIF`, `GREATEST`, `LEAST`, `IF`/`IIF`, `TYPEOF`, `CAST`
@@ -447,14 +470,17 @@ tensordb/
 │   ├── tensordb-cli/            # Interactive shell and CLI commands
 │   ├── tensordb-server/         # PostgreSQL wire protocol server (pgwire)
 │   ├── tensordb-native/         # Optional C++ acceleration (cxx)
+│   ├── tensordb-distributed/     # Horizontal scaling: routing, 2PC, rebalancing
 │   ├── tensordb-python/         # Python bindings (PyO3 / maturin)
 │   └── tensordb-node/           # Node.js bindings (napi-rs)
-├── tests/                       # 698 tests across 33 suites
+├── tests/                       # 740+ tests across 35 suites
 ├── benches/                     # Criterion benchmarks (basic, comparative, multi-engine)
-├── examples/                    # quickstart.rs, bitemporal.rs, ai_native.rs
+├── examples/                    # quickstart.rs, bitemporal.rs, ai_native.rs, fastapi, express
 ├── docs/                        # Interactive documentation site (Starlight/Astro)
 ├── scripts/                     # Benchmark matrix, AI overhead gate, overnight burn-in
-└── .github/workflows/ci.yml     # CI: fmt, clippy, test, AI overhead gate
+├── Dockerfile                   # Multi-stage Docker image for tensordb-server
+├── docker-compose.yml           # Docker Compose example with volume and healthcheck
+└── .github/workflows/           # CI, crates.io publish, Docker image publish
 ```
 
 ## Building
@@ -533,15 +559,16 @@ Two jobs run on every push and PR to `main`:
 - **Embedded LLM** — Qwen3 0.6B via llama-cpp-2, feature-gated (`--features llm`)
 - **EOAC Transactions** — Real `BEGIN`/`COMMIT`/`ROLLBACK`/`SAVEPOINT` with epoch-ordered concurrency
 - **Point-in-Time Recovery** — `AS OF EPOCH` cross-shard consistent snapshots + incremental backup
+- **Advanced Vector Search** — `VECTOR(n)` column type, HNSW/IVF-PQ indexes, `<->` distance operator, hybrid search (vector + BM25), temporal vector queries, FP16/INT8 quantization
+- **Horizontal Scaling** — `tensordb-distributed` crate with consistent hash routing, 2PC distributed transactions, online shard rebalancing, phi-accrual failure detection, gossip discovery
+- **Ecosystem** — Docker image, docker-compose, crates.io/PyPI/npm publish workflows, FastAPI and Express.js example apps
 
 ### Upcoming
 
 - **AI Runtime v2** — Pluggable model backends (ONNX, HTTP), anomaly detection, pattern learning, cross-shard correlation
-- **Advanced Vector Search** — `VECTOR(n)` column type, IVF-PQ for billion-scale, hybrid search (vector + BM25 + temporal)
 - **ML Pipelines** — In-database feature store, model registry, training data export, inference UDFs
 - **Key Rotation & Column Encryption** — Encryption key rotation, column-level encryption, GDPR erasure support
 - **Cloud-Native** — S3 storage backend, Helm chart, Kubernetes operator, compute-storage separation
-- **Horizontal Scaling** — Distributed shard routing, online rebalancing, distributed transactions
 - **v1.0 Stable Release** — Stable on-disk format, Jepsen testing, TPC-H/YCSB benchmarks
 
 See the full roadmap with per-version feature tracking in the [design.md](design.md).

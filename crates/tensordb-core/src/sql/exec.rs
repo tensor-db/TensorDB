@@ -13,6 +13,10 @@ use crate::facet::relational::{
     view_meta_key, FtsIndexMetadata, IndexMetadata, TableColumnMetadata, TableSchemaMetadata,
     TimeseriesMetadata, ViewMetadata,
 };
+use crate::facet::vector_persistence::{
+    parse_vector_literal, vector_data_key, vector_data_prefix, vector_index_meta_key,
+    VectorIndexMetadata, VectorRecord,
+};
 use crate::sql::eval::{
     filter_rows, parse_interval_seconds, sql_value_to_json, AggAccumulator, EvalContext,
     FirstAccumulator, LastAccumulator, SqlValue,
@@ -765,9 +769,20 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
 
                 let cols = columns
                     .iter()
-                    .map(|c| TableColumnMetadata {
-                        name: c.name.clone(),
-                        type_name: c.type_name.name().to_string(),
+                    .map(|c| {
+                        let type_str = match c.type_name {
+                            crate::sql::parser::SqlType::Vector { dims } => {
+                                format!("VECTOR({dims})")
+                            }
+                            crate::sql::parser::SqlType::Decimal { precision, scale } => {
+                                format!("DECIMAL({precision},{scale})")
+                            }
+                            _ => c.type_name.name().to_string(),
+                        };
+                        TableColumnMetadata {
+                            name: c.name.clone(),
+                            type_name: type_str,
+                        }
                     })
                     .collect();
 
@@ -909,6 +924,16 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
         Statement::DropFulltextIndex { index, table } => {
             execute_drop_fulltext_index(db, session, &index, &table)
         }
+        Statement::CreateVectorIndex {
+            index,
+            table,
+            column,
+            index_type,
+            params,
+        } => execute_create_vector_index(db, session, &index, &table, &column, index_type, &params),
+        Statement::DropVectorIndex { index, table } => {
+            execute_drop_vector_index(db, session, &index, &table)
+        }
         Statement::CreateTimeseriesTable {
             table,
             columns,
@@ -989,6 +1014,8 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             update_ts_buckets(db, session, &table, doc.as_bytes())?;
             // Update secondary indexes
             update_secondary_indexes(db, session, &table, &pk, doc.as_bytes())?;
+            // Update vector indexes
+            update_vector_indexes(db, session, &table, &pk, doc.as_bytes())?;
             Ok(SqlResult::Affected {
                 rows: 1,
                 commit_ts,
@@ -1043,6 +1070,8 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             update_ts_buckets(db, session, &table, &doc)?;
             // Update secondary indexes
             update_secondary_indexes(db, session, &table, &pk, &doc)?;
+            // Update vector indexes
+            update_vector_indexes(db, session, &table, &pk, &doc)?;
             Ok(SqlResult::Affected {
                 rows: 1,
                 commit_ts,
@@ -1101,9 +1130,11 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
 
                 // Remove old index entries, add new ones
                 remove_secondary_indexes(db, session, &table, &row.pk, &row.doc)?;
+                remove_vector_indexes(db, session, &table, &row.pk)?;
                 let key = row_key(&table, &row.pk);
                 let ts = write_put(db, session, key, new_doc.clone(), 0, u64::MAX, Some(1))?;
                 update_secondary_indexes(db, session, &table, &row.pk, &new_doc)?;
+                update_vector_indexes(db, session, &table, &row.pk, &new_doc)?;
                 last_commit_ts = ts.or(last_commit_ts);
                 count += 1;
             }
@@ -1135,6 +1166,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             for row in &rows {
                 // Remove index entries before deleting the row
                 remove_secondary_indexes(db, session, &table, &row.pk, &row.doc)?;
+                remove_vector_indexes(db, session, &table, &row.pk)?;
                 let key = row_key(&table, &row.pk);
                 // Write empty value as tombstone (append-only delete)
                 let ts = write_put(db, session, key, Vec::new(), 0, u64::MAX, Some(1))?;
@@ -1463,7 +1495,11 @@ fn execute_select(
             }
         }
         TableRef::TableFunction { name, args, alias } => {
-            let rows = execute_table_function(name, args)?;
+            let rows = if name.eq_ignore_ascii_case("vector_search") {
+                execute_vector_search_fn(db, session, args)?
+            } else {
+                execute_table_function(name, args)?
+            };
             let virt_name = alias.clone().unwrap_or_else(|| name.clone());
             cte_data.insert(virt_name.clone(), rows);
             virt_name
@@ -4001,6 +4037,343 @@ fn execute_drop_fulltext_index(
     })
 }
 
+fn execute_create_vector_index(
+    db: &Database,
+    session: &mut SqlSession,
+    index: &str,
+    table: &str,
+    column: &str,
+    index_type: crate::sql::parser::VectorIndexType,
+    params: &[(String, String)],
+) -> Result<SqlResult> {
+    validate_index_name(index)?;
+    validate_table_name(table)?;
+    let schema = load_table_schema(db, session, table)?;
+
+    // Validate the column exists and is a VECTOR type
+    let col_meta = schema
+        .columns
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case(column));
+    let dims: u16 = match col_meta {
+        Some(c) if c.type_name.starts_with("VECTOR(") => {
+            // Parse dims from "VECTOR(384)"
+            let inner = &c.type_name[7..c.type_name.len() - 1];
+            inner.parse::<u16>().map_err(|_| {
+                TensorError::SqlExec(format!(
+                    "invalid VECTOR dimensions in schema: {}",
+                    c.type_name
+                ))
+            })?
+        }
+        Some(c) => {
+            return Err(TensorError::SqlExec(format!(
+                "column {} has type {}, expected VECTOR",
+                column, c.type_name
+            )));
+        }
+        None => {
+            return Err(TensorError::SqlExec(format!(
+                "column {} does not exist on table {}",
+                column, table
+            )));
+        }
+    };
+
+    // Check if vector index already exists
+    let key = vector_index_meta_key(table, column);
+    if let Some(existing) = read_live_key(db, session, key.as_bytes(), None, None)? {
+        if existing != b"{}" {
+            return Err(TensorError::SqlExec(format!(
+                "vector index already exists on {table}({column})"
+            )));
+        }
+    }
+
+    // Extract metric from params (default: cosine)
+    let metric = params
+        .iter()
+        .find(|(k, _)| k == "metric")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| "cosine".to_string());
+
+    let meta = VectorIndexMetadata::new(
+        index.to_string(),
+        table.to_string(),
+        column.to_string(),
+        dims,
+        index_type,
+        metric,
+        params.to_vec(),
+    );
+
+    let payload = serde_json::to_vec(&meta)?;
+    let commit_ts = write_put(db, session, key.into_bytes(), payload, 0, u64::MAX, Some(1))?;
+
+    Ok(SqlResult::Affected {
+        rows: 1,
+        commit_ts,
+        message: format!(
+            "created vector index {index} on {table}({column}) using {}",
+            meta.index_type
+        ),
+    })
+}
+
+fn execute_drop_vector_index(
+    db: &Database,
+    session: &mut SqlSession,
+    index: &str,
+    table: &str,
+) -> Result<SqlResult> {
+    validate_index_name(index)?;
+    validate_table_name(table)?;
+
+    // Find the vector index metadata by scanning all vector indexes on this table
+    let prefix = format!("__meta/vector_index/{table}/");
+    let metas = db.scan_prefix(prefix.as_bytes(), None, None, None)?;
+
+    let mut found = false;
+    for meta_row in &metas {
+        if let Ok(meta) = serde_json::from_slice::<VectorIndexMetadata>(&meta_row.doc) {
+            if meta.index_name == index {
+                let key = vector_index_meta_key(table, &meta.column);
+                write_put(
+                    db,
+                    session,
+                    key.into_bytes(),
+                    b"{}".to_vec(),
+                    0,
+                    u64::MAX,
+                    Some(1),
+                )?;
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if !found {
+        return Err(TensorError::SqlExec(format!(
+            "vector index {index} does not exist on {table}"
+        )));
+    }
+
+    Ok(SqlResult::Affected {
+        rows: 1,
+        commit_ts: None,
+        message: format!("dropped vector index {index} on {table}"),
+    })
+}
+
+/// Store vector data for all vector indexes on a table.
+/// For each vector index on this table, extracts the vector column value from the doc,
+/// parses it as a vector literal, and stores a VectorRecord under `__vec/{table}/{column}/{pk}`.
+fn update_vector_indexes(
+    db: &Database,
+    session: &mut SqlSession,
+    table: &str,
+    pk: &str,
+    doc: &[u8],
+) -> Result<()> {
+    let prefix = format!("__meta/vector_index/{table}/");
+    let metas = db.scan_prefix(prefix.as_bytes(), None, None, None)?;
+
+    for meta_row in &metas {
+        // Skip tombstoned metadata
+        if meta_row.doc == b"{}" {
+            continue;
+        }
+        if let Ok(meta) = serde_json::from_slice::<VectorIndexMetadata>(&meta_row.doc) {
+            if meta.table != table {
+                continue;
+            }
+            // Extract the vector column value from the JSON doc
+            if let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_slice::<serde_json::Value>(doc)
+            {
+                if let Some(val) = map.get(&meta.column) {
+                    let vec_str = match val {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Array(_) => val.to_string(),
+                        _ => continue,
+                    };
+                    if let Ok(floats) = parse_vector_literal(&vec_str) {
+                        if floats.len() == meta.dims as usize {
+                            let record = VectorRecord::from_f32(&floats);
+                            let key = vector_data_key(table, &meta.column, pk);
+                            write_put(
+                                db,
+                                session,
+                                key.into_bytes(),
+                                record.to_bytes(),
+                                0,
+                                u64::MAX,
+                                Some(1),
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Remove vector data for all vector indexes on a table when a row is deleted or updated.
+fn remove_vector_indexes(
+    db: &Database,
+    session: &mut SqlSession,
+    table: &str,
+    pk: &str,
+) -> Result<()> {
+    let prefix = format!("__meta/vector_index/{table}/");
+    let metas = db.scan_prefix(prefix.as_bytes(), None, None, None)?;
+
+    for meta_row in &metas {
+        if meta_row.doc == b"{}" {
+            continue;
+        }
+        if let Ok(meta) = serde_json::from_slice::<VectorIndexMetadata>(&meta_row.doc) {
+            if meta.table != table {
+                continue;
+            }
+            // Write an empty tombstone for the vector data
+            let key = vector_data_key(table, &meta.column, pk);
+            write_put(
+                db,
+                session,
+                key.into_bytes(),
+                Vec::new(),
+                0,
+                u64::MAX,
+                Some(1),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Execute `vector_search('table', 'column', '[0.1, 0.2, ...]', k)` table function.
+/// Scans all stored vector records for the given table/column, computes distances,
+/// and returns the k nearest neighbors.
+fn execute_vector_search_fn(
+    db: &Database,
+    session: &mut SqlSession,
+    args: &[Expr],
+) -> Result<Vec<VisibleRow>> {
+    use crate::facet::vector_search::DistanceMetric;
+
+    if args.len() < 3 {
+        return Err(TensorError::SqlExec(
+            "vector_search() requires at least 3 arguments: table, column, query_vector [, k]"
+                .to_string(),
+        ));
+    }
+
+    let table = match &args[0] {
+        Expr::StringLit(s) => s.clone(),
+        _ => {
+            return Err(TensorError::SqlExec(
+                "vector_search() first argument must be a table name string".to_string(),
+            ))
+        }
+    };
+    let column = match &args[1] {
+        Expr::StringLit(s) => s.clone(),
+        _ => {
+            return Err(TensorError::SqlExec(
+                "vector_search() second argument must be a column name string".to_string(),
+            ))
+        }
+    };
+    let query_str = match &args[2] {
+        Expr::StringLit(s) => s.clone(),
+        _ => {
+            return Err(TensorError::SqlExec(
+                "vector_search() third argument must be a vector literal string".to_string(),
+            ))
+        }
+    };
+    let k = if args.len() > 3 {
+        match eval_const_expr(&args[3])? {
+            SqlValue::Number(n) => n as usize,
+            _ => 10,
+        }
+    } else {
+        10
+    };
+
+    let query = parse_vector_literal(&query_str)?;
+
+    // Load metric from index metadata (default to cosine)
+    let meta_key = vector_index_meta_key(&table, &column);
+    let metric =
+        if let Some(meta_bytes) = read_live_key(db, session, meta_key.as_bytes(), None, None)? {
+            if meta_bytes != b"{}" {
+                if let Ok(meta) = serde_json::from_slice::<VectorIndexMetadata>(&meta_bytes) {
+                    match meta.metric.as_str() {
+                        "euclidean" | "l2" => DistanceMetric::Euclidean,
+                        "dot_product" | "dot" => DistanceMetric::DotProduct,
+                        _ => DistanceMetric::Cosine,
+                    }
+                } else {
+                    DistanceMetric::Cosine
+                }
+            } else {
+                DistanceMetric::Cosine
+            }
+        } else {
+            DistanceMetric::Cosine
+        };
+
+    // Scan all vector records for this table/column
+    let prefix = vector_data_prefix(&table, &column);
+    let records = db.scan_prefix(prefix.as_bytes(), None, None, None)?;
+
+    // Compute distances and find top-k
+    let mut scored: Vec<(String, f32, Vec<f32>)> = Vec::new();
+    for rec in &records {
+        if rec.doc.is_empty() {
+            continue; // tombstone
+        }
+        if let Ok(vr) = VectorRecord::from_bytes(&rec.doc) {
+            let vec = vr.to_f32_vec();
+            if vec.len() == query.len() {
+                let dist = metric.compute(&query, &vec);
+                // Extract pk from the key: __vec/{table}/{column}/{pk}
+                let key_str = String::from_utf8_lossy(&rec.user_key);
+                let pk = key_str.rsplit('/').next().unwrap_or(&key_str).to_string();
+                scored.push((pk, dist, vec));
+            }
+        }
+    }
+
+    // Sort by distance and take top k
+    scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(k);
+
+    // Build result rows
+    let mut rows = Vec::new();
+    for (rank, (pk, distance, _vec)) in scored.iter().enumerate() {
+        let mut obj = serde_json::Map::new();
+        obj.insert("pk".to_string(), serde_json::Value::String(pk.clone()));
+        obj.insert("distance".to_string(), serde_json::json!(*distance));
+        obj.insert(
+            "score".to_string(),
+            serde_json::json!(1.0 / (1.0 + *distance as f64)),
+        );
+        obj.insert("rank".to_string(), serde_json::json!(rank + 1));
+        let doc = serde_json::to_vec(&serde_json::Value::Object(obj))?;
+        rows.push(VisibleRow {
+            pk: pk.clone(),
+            doc,
+        });
+    }
+
+    Ok(rows)
+}
+
 /// Index a single row for all FTS indexes on a table.
 fn update_fts_indexes(
     db: &Database,
@@ -5493,6 +5866,8 @@ fn execute_insert_returning(
     update_fts_indexes(db, session, table, &pk, &doc)?;
     // Update time-series buckets
     update_ts_buckets(db, session, table, &doc)?;
+    // Update vector indexes
+    update_vector_indexes(db, session, table, &pk, &doc)?;
 
     // Build RETURNING result
     let mut ctx = EvalContext::new(&pk, &doc);

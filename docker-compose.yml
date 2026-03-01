@@ -1,0 +1,23 @@
+# TensorDB docker-compose example
+# Usage: docker compose up -d
+# Connect: psql -h localhost -p 5433
+
+services:
+  tensordb:
+    build: .
+    ports:
+      - "5433:5433"
+    volumes:
+      - tensordb_data:/data
+    environment:
+      - TENSORDB_DATA_DIR=/data
+      - TENSORDB_PORT=5433
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "tensordb-cli", "--path", "/data", "-c", "SELECT 1;"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  tensordb_data:

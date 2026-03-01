@@ -2843,6 +2843,7 @@ dependencies = [
  "dirs",
  "encoding_rs",
  "fastrand",
+ "half",
  "io-uring",
  "llama-cpp-2",
  "lz4_flex",
@@ -2857,6 +2858,20 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "ureq",
+]
+
+[[package]]
+name = "tensordb-distributed"
+version = "0.2.0"
+dependencies = [
+ "crossbeam-channel",
+ "fastrand",
+ "parking_lot 0.12.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tensordb-core",
+ "tokio",
 ]
 
 [[package]]

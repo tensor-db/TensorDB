@@ -29,6 +29,7 @@ fastrand = "2"
 tracing = "0.1"
 lz4_flex = "0.11"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
+half = "2"
 aes-gcm = { version = "0.10", optional = true }
 
 tensordb-native = { path = "../tensordb-native", optional = true }
