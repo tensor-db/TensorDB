@@ -21,17 +21,27 @@ TensorDB is an embedded database that treats every write as an immutable fact. I
 
 ## Performance
 
-| Operation | TensorDB | SQLite | sled | redb |
-|-----------|-----------|--------|------|------|
-| Point Read | **276 ns** | 1,080 ns | 244 ns | 573 ns |
-| Point Write | **1.9 µs** | 38.6 µs | — | — |
-| Prefix Scan (1k keys) | **native** | — | — | — |
-| Mixed 80r/20w | **native** | — | — | — |
+Full 4-way Criterion benchmark (optimized release build):
 
-- **4x faster reads** than SQLite
-- **20x faster writes** than SQLite via lock-free fast write path
-- **276 ns** point reads via direct shard bypass (no channel round-trip)
-- **1.9 µs** point writes via `FastWritePath` with group-commit WAL
+| Operation | TensorDB | SQLite | sled | redb |
+|-----------|----------|--------|------|------|
+| Point Read | **273 ns** | 1,145 ns | 278 ns | 570 ns |
+| Point Write | **3.6 µs** | 41.9 µs | 4.3 µs | 1,392 µs |
+| Batch Write (100) | 1,063 µs | 344 µs | 588 µs | 4,904 µs |
+| Prefix Scan (1k) | 249 µs | 137 µs | 165 µs | 63 µs |
+| Mixed 80r/20w | 34 µs | 9.5 µs | 1.1 µs | 277 µs |
+| SQL SELECT (100 rows) | **56 µs** | — | — | — |
+
+| Throughput (reads/sec) | 1k keys | 10k keys | 50k keys |
+|------------------------|---------|----------|----------|
+| TensorDB | **3.8M** | **3.5M** | **1.9M** |
+| sled | 4.6M | 3.5M | 2.8M |
+
+- **4.2x faster reads** than SQLite, on par with sled
+- **11.6x faster writes** than SQLite via lock-free fast write path
+- **273 ns** point reads via direct shard bypass (no channel round-trip)
+- **3.6 µs** point writes via `FastWritePath` with group-commit WAL
+- **3.8M reads/sec** sustained throughput at 1k dataset size
 
 Benchmarks use Criterion 0.5. Run them yourself:
 
@@ -149,7 +159,7 @@ cargo run --example ai_native      # AI runtime: insights, risk scoring, query p
 
 ### SQL Engine
 - **Full SQL** — DDL, DML, SELECT, JOINs (inner/left/right/cross), GROUP BY, HAVING, CTEs, subqueries, UNION/INTERSECT/EXCEPT, window functions, CASE, CAST, LIKE/ILIKE, transactions.
-- **50+ built-in functions** — String, numeric, date/time, aggregate, window, conditional, type conversion.
+- **60+ built-in functions** — String, numeric, date/time, aggregate, window, conditional, type conversion, vector search.
 - **Cost-based query planner** — `PlanNode` tree with cost estimation, `EXPLAIN` and `EXPLAIN ANALYZE`.
 - **Prepared statements** — Parse once, execute many with `$1, $2, ...` parameter binding.
 - **Temporal SQL** — 7 SQL:2011 temporal clause variants for both system time and application time.
@@ -247,7 +257,7 @@ graph TB
     end
 
     subgraph Query Engine
-        Parser[SQL Parser<br/>50+ functions · CTEs · windows]
+        Parser[SQL Parser<br/>60+ functions · CTEs · windows]
         Planner[Cost-Based Planner<br/>PlanNode tree · EXPLAIN ANALYZE]
         Executor[Query Executor<br/>scans · joins · aggregates · windows]
         VecEngine[Vectorized Engine<br/>columnar batches · RecordBatch]
@@ -257,7 +267,7 @@ graph TB
         RF[Relational Facet<br/>typed tables · views · indexes]
         FTS[Full-Text Search<br/>inverted index · BM25 · stemmer]
         TS[Time-Series<br/>time_bucket · gap fill · rate]
-        VS[Vector Search<br/>HNSW · cosine · euclidean]
+        VS[Vector Search<br/>HNSW · IVF-PQ · hybrid · temporal]
         ES[Event Sourcing<br/>aggregates · snapshots]
     end
 
@@ -544,34 +554,105 @@ cd docs && npm install && npm run dev
 
 ## CI Pipeline
 
-Two jobs run on every push and PR to `main`:
+**On every push and PR to `main`:**
 
 1. **test-rust** — `cargo fmt --check` → `cargo clippy -D warnings` → `cargo test --workspace` → AI overhead gate script
 2. **test-native** — C++ toolchain → `cargo clippy --features native` → `cargo test --features native`
 
+**On release:**
+
+3. **publish-crates** — Publish `tensordb-core` and `tensordb` to crates.io
+4. **publish-docker** — Build and push multi-arch Docker image to `ghcr.io`
+
 ## Roadmap
 
-> **Strategy**: Fix foundations → Make it fast → Own the niche (bitemporal + AI + embedded) → Speak Postgres → Then expand.
+> **Strategy**: Fix foundations → Make it fast → Own the niche (bitemporal + AI + embedded) → Speak Postgres → Delight users → Then scale.
 
 ### Done
 
-- **Encryption at Rest** — AES-256-GCM block-level encryption (`--features encryption`)
-- **Embedded LLM** — Qwen3 0.6B via llama-cpp-2, feature-gated (`--features llm`)
-- **EOAC Transactions** — Real `BEGIN`/`COMMIT`/`ROLLBACK`/`SAVEPOINT` with epoch-ordered concurrency
-- **Point-in-Time Recovery** — `AS OF EPOCH` cross-shard consistent snapshots + incremental backup
-- **Advanced Vector Search** — `VECTOR(n)` column type, HNSW/IVF-PQ indexes, `<->` distance operator, hybrid search (vector + BM25), temporal vector queries, FP16/INT8 quantization
-- **Horizontal Scaling** — `tensordb-distributed` crate with consistent hash routing, 2PC distributed transactions, online shard rebalancing, phi-accrual failure detection, gossip discovery
-- **Ecosystem** — Docker image, docker-compose, crates.io/PyPI/npm publish workflows, FastAPI and Express.js example apps
+- **v0.1–v0.10** — Core engine, SQL, storage, query planner, prepared statements
+- **v0.11–v0.18** — Temporal SQL:2011, FTS, time-series, pgwire, data interchange, vectorized execution
+- **v0.19–v0.26** — Columnar storage, CDC, event sourcing, auth/RBAC, connection pooling, monitoring, schema evolution
+- **v0.27–v0.28** — Replication foundations, fast write engine
+- **v0.29** — EOAC transactions, PITR, incremental backup, encryption at rest
+- **v0.2.0** — Embedded LLM (Qwen3 0.6B via llama-cpp-2)
+- **v0.30** — Advanced vector search (VECTOR(n), HNSW/IVF-PQ, hybrid search, temporal vectors), horizontal scaling (tensordb-distributed crate), ecosystem (Docker, CI publish workflows, example apps)
 
-### Upcoming
+### Phase 1: Observability & Diagnostics
 
-- **AI Runtime v2** — Pluggable model backends (ONNX, HTTP), anomaly detection, pattern learning, cross-shard correlation
-- **ML Pipelines** — In-database feature store, model registry, training data export, inference UDFs
-- **Key Rotation & Column Encryption** — Encryption key rotation, column-level encryption, GDPR erasure support
-- **Cloud-Native** — S3 storage backend, Helm chart, Kubernetes operator, compute-storage separation
-- **v1.0 Stable Release** — Stable on-disk format, Jepsen testing, TPC-H/YCSB benchmarks
+Surface the internals so users can answer "what is my database doing?" without guessing.
 
-See the full roadmap with per-version feature tracking in the [design.md](design.md).
+- **`SHOW STATS`** — SQL command exposing MetricsRegistry: cache hit rates, compaction stats, WAL size, bloom filter false positive rate, shard load distribution
+- **`SHOW SLOW QUERIES`** — SQL-accessible slow query log with query text, duration, rows scanned, plan used
+- **`SHOW ACTIVE QUERIES`** — List currently running queries with elapsed time and resource usage
+- **`SHOW STORAGE`** — Per-table/index/WAL disk space breakdown: data size, index size, tombstone count, compaction amplification ratio
+- **`SHOW COMPACTION STATUS`** — L0 file count, pending compactions, last compaction time, bytes written per level
+- **Live query profiling** — Per-query latency histogram, rows scanned vs returned ratio, cache miss tracking
+- **Health endpoint** — `/health` JSON endpoint for pgwire server with liveness, readiness, and storage metrics
+
+### Phase 2: Error Quality & Developer Experience
+
+Make errors helpful instead of cryptic. Reduce friction for new users.
+
+- **Structured error codes** — Stable numeric codes (`T1001 SYNTAX_ERROR`, `T2001 TABLE_NOT_FOUND`, etc.) for programmatic handling, mapped to categories (syntax, schema, constraint, IO, auth)
+- **"Did you mean?" suggestions** — Levenshtein-based fuzzy matching for misspelled table names, column names, SQL keywords, and function names
+- **`SUGGEST INDEX FOR <query>`** — Analyze a query and recommend optimal indexes based on WHERE clauses, JOIN predicates, and ORDER BY columns
+- **Progress indicators** — Long-running operations (`COPY`, `BACKUP`, `RESTORE`, compaction, bulk INSERT) report rows processed, bytes written, ETA
+- **Strict mode** — `SET STRICT_MODE = ON` to fail on silent type coercion, truncation, and implicit NULL insertion instead of silently proceeding
+- **`VERIFY BACKUP <path>`** — Validate backup file integrity (checksums, key counts, epoch consistency) without restoring
+- **`VACUUM`** — Reclaim space from tombstones and old temporal versions, report bytes freed and compaction stats
+- **CLI autocomplete** — Context-aware TAB completion for table names, column names, SQL keywords, and function names in the interactive shell
+
+### Phase 3: Security & Audit
+
+Enterprise-grade security beyond basic RBAC.
+
+- **Audit log** — Append-only log of all DDL changes, auth events (login, failed attempts, permission changes), and data access patterns, queryable via `SELECT * FROM __audit_log`
+- **Row-level security** — `CREATE POLICY` for per-row access control based on session user, role, or arbitrary predicates
+- **Key rotation** — Rotate encryption keys without downtime: re-encrypt WAL and SSTables in background, track key versions per file
+- **Column-level encryption** — `CREATE TABLE ... (ssn TEXT ENCRYPTED)` for encrypting sensitive columns at rest with per-column keys
+- **GDPR erasure** — `FORGET KEY <key>` to cryptographically erase all temporal versions of a record while preserving ledger structure
+
+### Phase 4: Operational Maturity
+
+Production-hardening for teams running TensorDB in real workloads.
+
+- **Per-query resource limits** — `SET QUERY_TIMEOUT = 5000` and `SET QUERY_MAX_MEMORY = '256MB'` to prevent runaway queries
+- **Online DDL** — `ALTER TABLE ADD COLUMN`, `DROP COLUMN`, `RENAME COLUMN` without table locks or downtime
+- **Plan stability** — `CREATE PLAN GUIDE` to pin query plans and prevent regressions from stale statistics
+- **Backup dry-run** — `RESTORE FROM <path> DRY_RUN` to validate a restore without writing data, showing what would change
+- **Compaction scheduling** — User-configurable compaction windows (`SET COMPACTION_WINDOW = '02:00-06:00'`) to avoid peak-hour I/O
+- **WAL size management** — Configurable WAL retention, automatic WAL archival, and `SHOW WAL STATUS` for monitoring
+
+### Phase 5: AI Runtime v2
+
+Next-generation AI capabilities tightly integrated with the query engine.
+
+- **Pluggable model backends** — ONNX Runtime, HTTP model servers, and local llama.cpp behind a unified `ModelBackend` trait
+- **Anomaly detection** — Automatic detection of unusual write patterns, schema drift, and query performance regressions
+- **Pattern learning** — Learn access patterns over time to auto-tune cache policies, prefetch strategies, and compaction schedules
+- **Inference UDFs** — `SELECT predict(model_name, features...) FROM data` for in-database model inference
+- **Cross-shard correlation** — AI runtime correlates change events across shards for holistic insight synthesis
+
+### Phase 6: Cloud-Native & Scale
+
+From embedded to distributed.
+
+- **S3 storage backend** — Tiered storage with hot data on local SSD, cold data on S3-compatible object storage
+- **Compute-storage separation** — Stateless query nodes reading from shared storage
+- **gRPC transport** — Wire up `tensordb-distributed` with tonic/prost for actual multi-node deployment
+- **Helm chart & Kubernetes operator** — Deploy TensorDB clusters on Kubernetes with auto-scaling and self-healing
+- **ML Pipelines** — In-database feature store with point-in-time joins, model registry, training data export
+
+### v1.0 Stable Release
+
+- **Stable on-disk format** — Backward-compatible SSTable and WAL format with versioned headers
+- **Jepsen testing** — Formal verification of transaction isolation and crash recovery guarantees
+- **TPC-H / YCSB benchmarks** — Industry-standard benchmark results for credibility
+- **Semantic versioning** — No breaking API or format changes within major versions
+- **Migration tooling** — `tensordb-migrate` for upgrading on-disk format between major versions
+
+See the full changelog in [CHANGELOG.md](CHANGELOG.md) and architecture details in [design.md](design.md).
 
 ## Contributing
 
