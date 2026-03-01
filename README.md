@@ -179,12 +179,37 @@ cargo run --example ai_native      # AI runtime: insights, risk scoring, query p
 - **Authentication & RBAC** — User management, role-based access control, table-level permissions, session management.
 - **Connection Pooling** — Configurable pool with warmup, idle eviction, and RAII connection guards.
 
-### AI Runtime
+### AI Runtime & Embedded Inference Engine
+- **Pure-Rust LLM Inference** — Custom inference engine (~3.3K LoC) running Qwen3-0.6B entirely in-process. No C++ toolchain, no llama.cpp, no external model servers. Implements the full stack: GGUF v3 parser, BPE tokenizer, Qwen2 transformer with GQA + RoPE + SwiGLU, KV cache, and token sampling — all in safe Rust.
+- **`ASK` — Natural Language to SQL** — `ASK 'show me the top 10 customers by revenue'` translates to SQL and executes in one step. The database uses its own schema metadata to prompt the model, so it always knows your tables and columns.
+- **SQL Grammar-Constrained Decoding** — Unlike general-purpose inference engines, TensorDB biases token generation toward valid SQL at every decoding step. The grammar decoder penalizes non-SQL tokens, reducing invalid outputs without requiring retries.
+- **Schema-Aware KV Cache Reuse** — The system prompt + schema context is forward-passed once and the resulting KV cache state is reused across queries. When your schema hasn't changed, subsequent `ASK` calls skip ~80% of the inference work (~3-15x faster than cold calls).
+- **Schema Cache with DDL Invalidation** — Schema context is cached with a configurable TTL and automatically invalidated on `CREATE TABLE`, `DROP TABLE`, or `ALTER TABLE`.
 - **Background Insight Synthesis** — In-process AI pipeline consuming change feeds.
 - **Inline Risk Scoring** — Per-write risk assessment without external model servers.
 - **AI Advisors** — Compaction scheduling, cache tuning, query optimization recommendations.
 - **ML Pipeline** — Feature store, model registry, point-in-time joins, inference metrics.
 - **`EXPLAIN AI`** — SQL command for AI insights, provenance, and risk scores per key.
+
+<details>
+<summary><strong>Why build a custom inference engine instead of using llama.cpp?</strong></summary>
+
+Most databases that embed AI wrap an existing C/C++ inference library (PostgresML wraps libtorch, SQLite-AI wraps llama.cpp). TensorDB takes a different approach: a purpose-built pure-Rust inference engine that trades generality for deep integration.
+
+| | TensorDB Native Engine | llama.cpp |
+|---|---|---|
+| **Code** | ~3.3K lines pure Rust | ~100K+ lines C/C++ |
+| **Build** | `cargo build` (no C++ toolchain) | Requires clang/gcc, bindgen, platform headers |
+| **Scope** | Qwen2/3 for SQL generation | Any architecture, any task |
+| **GPU** | CPU only | CUDA, Metal, Vulkan, 10+ backends |
+| **Quantization** | Q8_0, Q4_0, F16, F32 | 30+ formats including sub-2-bit |
+| **Grammar** | SQL-specific soft constraints | GBNF formal grammar (any grammar) |
+| **Schema integration** | Direct access to database metadata, KV cache reuse across calls with same schema | External process, no schema awareness |
+| **Cross-compilation** | Pure Rust — compiles anywhere Rust does | Platform-specific C++ toolchain per target |
+
+The trade-off is intentional: TensorDB's engine is not a general-purpose inference runtime. It runs one model family on CPU for one task (NL-to-SQL). In exchange, it compiles with `cargo build`, cross-compiles trivially, has zero unsafe C++ dependencies, and integrates directly with the database's schema metadata and query engine.
+
+</details>
 
 ### Language Bindings & Integrations
 - **Rust** — Native embedded library (`tensordb-core`).
