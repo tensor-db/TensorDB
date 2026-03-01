@@ -104,7 +104,7 @@ fn collect_statement_tables(stmt: &Statement) -> Vec<String> {
     match stmt {
         Statement::Select { from, joins, .. } => {
             let mut tables = Vec::new();
-            if let TableRef::Named(t) = from {
+            if let TableRef::Named { name: t, .. } = from {
                 tables.push(t.clone());
             }
             for js in joins {
@@ -297,9 +297,14 @@ fn subst_expr(expr: Expr, params: &[&str]) -> Expr {
             right: Box::new(subst_expr(*right, params)),
         },
         Expr::Not(inner) => Expr::Not(Box::new(subst_expr(*inner, params))),
-        Expr::Function { name, args } => Expr::Function {
+        Expr::Function {
+            name,
+            args,
+            distinct,
+        } => Expr::Function {
             name,
             args: args.into_iter().map(|a| subst_expr(a, params)).collect(),
+            distinct,
         },
         Expr::IsNull {
             expr: inner,
@@ -481,6 +486,114 @@ fn visit_expr(expr: &Expr, visitor: &mut dyn FnMut(&Expr)) {
             }
         }
         _ => {}
+    }
+}
+
+/// Rewrite alias-qualified FieldAccess to use real table names.
+/// e.g., `u.name` with alias_map {"u" -> "users"} becomes `users.name`.
+fn rewrite_aliases(expr: Expr, alias_map: &std::collections::HashMap<String, String>) -> Expr {
+    if alias_map.is_empty() {
+        return expr;
+    }
+    match expr {
+        Expr::FieldAccess { column, path } => {
+            let resolved = alias_map
+                .get(&column.to_lowercase())
+                .cloned()
+                .unwrap_or(column);
+            Expr::FieldAccess {
+                column: resolved,
+                path,
+            }
+        }
+        Expr::BinOp { left, op, right } => Expr::BinOp {
+            left: Box::new(rewrite_aliases(*left, alias_map)),
+            op,
+            right: Box::new(rewrite_aliases(*right, alias_map)),
+        },
+        Expr::Not(inner) => Expr::Not(Box::new(rewrite_aliases(*inner, alias_map))),
+        Expr::Function {
+            name,
+            args,
+            distinct,
+        } => Expr::Function {
+            name,
+            args: args
+                .into_iter()
+                .map(|a| rewrite_aliases(a, alias_map))
+                .collect(),
+            distinct,
+        },
+        Expr::IsNull {
+            expr: inner,
+            negated,
+        } => Expr::IsNull {
+            expr: Box::new(rewrite_aliases(*inner, alias_map)),
+            negated,
+        },
+        Expr::Between {
+            expr: inner,
+            low,
+            high,
+            negated,
+        } => Expr::Between {
+            expr: Box::new(rewrite_aliases(*inner, alias_map)),
+            low: Box::new(rewrite_aliases(*low, alias_map)),
+            high: Box::new(rewrite_aliases(*high, alias_map)),
+            negated,
+        },
+        Expr::InList {
+            expr: inner,
+            list,
+            negated,
+        } => Expr::InList {
+            expr: Box::new(rewrite_aliases(*inner, alias_map)),
+            list: list
+                .into_iter()
+                .map(|e| rewrite_aliases(e, alias_map))
+                .collect(),
+            negated,
+        },
+        Expr::Case {
+            operand,
+            when_clauses,
+            else_clause,
+        } => Expr::Case {
+            operand: operand.map(|o| Box::new(rewrite_aliases(*o, alias_map))),
+            when_clauses: when_clauses
+                .into_iter()
+                .map(|(w, t)| (rewrite_aliases(w, alias_map), rewrite_aliases(t, alias_map)))
+                .collect(),
+            else_clause: else_clause.map(|e| Box::new(rewrite_aliases(*e, alias_map))),
+        },
+        Expr::Cast {
+            expr: inner,
+            target_type,
+        } => Expr::Cast {
+            expr: Box::new(rewrite_aliases(*inner, alias_map)),
+            target_type,
+        },
+        Expr::WindowFunction {
+            name,
+            args,
+            partition_by,
+            order_by,
+        } => Expr::WindowFunction {
+            name,
+            args: args
+                .into_iter()
+                .map(|a| rewrite_aliases(a, alias_map))
+                .collect(),
+            partition_by: partition_by
+                .into_iter()
+                .map(|e| rewrite_aliases(e, alias_map))
+                .collect(),
+            order_by: order_by
+                .into_iter()
+                .map(|(e, d)| (rewrite_aliases(e, alias_map), d))
+                .collect(),
+        },
+        other => other,
     }
 }
 
@@ -1470,8 +1583,23 @@ fn execute_select(
         }
     }
 
+    // Build alias map for table alias resolution
+    let mut alias_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if let TableRef::Named {
+        name: ref t,
+        alias: Some(ref a),
+    } = from
+    {
+        alias_map.insert(a.to_lowercase(), t.clone());
+    }
+    for js in &joins {
+        if let Some(ref a) = js.right_alias {
+            alias_map.insert(a.to_lowercase(), js.right_table.clone());
+        }
+    }
+
     let table_name = match &from {
-        TableRef::Named(t) => t.clone(),
+        TableRef::Named { name: t, .. } => t.clone(),
         TableRef::Subquery { alias, query } => {
             let result = execute_stmt(db, session, *query.clone())?;
             match result {
@@ -1513,6 +1641,48 @@ fn execute_select(
     if table_name == "ai_cluster_summary" {
         return execute_ai_cluster_summary(db, filter.as_ref());
     }
+
+    // Rewrite alias-qualified expressions to use real table names
+    let joins = if !alias_map.is_empty() {
+        joins
+            .into_iter()
+            .map(|mut js| {
+                if let Some(on) = js.on_clause {
+                    js.on_clause = Some(rewrite_aliases(on, &alias_map));
+                }
+                js
+            })
+            .collect()
+    } else {
+        joins
+    };
+    let (items, filter, group_by, having, order_by) = if !alias_map.is_empty() {
+        let items = items
+            .into_iter()
+            .map(|si| match si {
+                SelectItem::Expr { expr, alias } => SelectItem::Expr {
+                    expr: rewrite_aliases(expr, &alias_map),
+                    alias,
+                },
+                other => other,
+            })
+            .collect::<Vec<_>>();
+        let filter = filter.map(|f| rewrite_aliases(f, &alias_map));
+        let group_by = group_by.map(|gb| {
+            gb.into_iter()
+                .map(|e| rewrite_aliases(e, &alias_map))
+                .collect()
+        });
+        let having = having.map(|h| rewrite_aliases(h, &alias_map));
+        let order_by = order_by.map(|ob| {
+            ob.into_iter()
+                .map(|(e, d)| (rewrite_aliases(e, &alias_map), d))
+                .collect()
+        });
+        (items, filter, group_by, having, order_by)
+    } else {
+        (items, filter, group_by, having, order_by)
+    };
 
     // Check if this is a CTE reference (or table function result)
     let rows = if let Some(cte_rows) = cte_data.remove(&table_name) {
@@ -1724,7 +1894,7 @@ fn execute_grouped_select(
     // Detect the legacy pk, count(*) GROUP BY pk pattern
     let is_legacy_pk_count = items.len() == 2
         && matches!(&items[0], SelectItem::Expr { expr: Expr::Column(c), alias: None } if c.eq_ignore_ascii_case("pk"))
-        && matches!(&items[1], SelectItem::Expr { expr: Expr::Function { name, args }, alias: None }
+        && matches!(&items[1], SelectItem::Expr { expr: Expr::Function { name, args, .. }, alias: None }
             if name.eq_ignore_ascii_case("count") && args.len() == 1 && matches!(&args[0], Expr::Star));
 
     // Compute aggregates for each group
@@ -1832,12 +2002,28 @@ fn execute_grouped_select(
 
 fn eval_aggregate_expr(expr: &Expr, group_rows: &[&VisibleRow]) -> Result<SqlValue> {
     match expr {
-        Expr::Function { name, args } if is_aggregate_function(name) => {
+        Expr::Function {
+            name,
+            args,
+            distinct,
+        } if is_aggregate_function(name) => {
             let upper = name.to_uppercase();
             match upper.as_str() {
                 "COUNT" => {
                     if args.len() == 1 && matches!(&args[0], Expr::Star) {
                         return Ok(SqlValue::Number(group_rows.len() as f64));
+                    }
+                    if *distinct {
+                        // COUNT(DISTINCT col): count unique non-null values
+                        let mut seen = std::collections::HashSet::new();
+                        for row in group_rows {
+                            let mut ctx = EvalContext::new(&row.pk, &row.doc);
+                            let val = ctx.eval(&args[0])?;
+                            if !matches!(val, SqlValue::Null) {
+                                seen.insert(val.to_sort_string());
+                            }
+                        }
+                        return Ok(SqlValue::Number(seen.len() as f64));
                     }
                     let mut count = 0u64;
                     for row in group_rows {
@@ -1995,7 +2181,7 @@ fn eval_aggregate_expr(expr: &Expr, group_rows: &[&VisibleRow]) -> Result<SqlVal
             };
             ctx.eval(&combined)
         }
-        Expr::Function { name, args } => {
+        Expr::Function { name, args, .. } => {
             // Non-aggregate function wrapping aggregate args (e.g. ROUND(VAR_POP(age), 2))
             // Recursively resolve args through aggregate eval, then compute scalar function
             let resolved_args: Vec<Expr> = args
@@ -2005,6 +2191,7 @@ fn eval_aggregate_expr(expr: &Expr, group_rows: &[&VisibleRow]) -> Result<SqlVal
             let resolved = Expr::Function {
                 name: name.clone(),
                 args: resolved_args,
+                distinct: false,
             };
             let mut ctx = EvalContext::new("", b"{}");
             ctx.eval(&resolved)
@@ -2073,7 +2260,7 @@ struct GapfillInfo {
 /// Check if GROUP BY contains a `TIME_BUCKET_GAPFILL(...)` call.
 fn detect_gapfill(group_exprs: &[Expr]) -> Option<GapfillInfo> {
     for expr in group_exprs {
-        if let Expr::Function { name, args } = expr {
+        if let Expr::Function { name, args, .. } = expr {
             if name.eq_ignore_ascii_case("TIME_BUCKET_GAPFILL") && args.len() >= 2 {
                 let bucket_seconds = match &args[0] {
                     Expr::StringLit(s) => parse_interval_seconds(s),
@@ -2214,7 +2401,7 @@ fn apply_locf_interpolation(
 
     for item in items {
         if let SelectItem::Expr { expr, alias } = item {
-            if let Expr::Function { name, args } = expr {
+            if let Expr::Function { name, args, .. } = expr {
                 let col_name = alias
                     .clone()
                     .unwrap_or_else(|| aggregate_display_name(expr));
@@ -2270,7 +2457,7 @@ fn to_literal(val: &SqlValue) -> Expr {
 
 fn aggregate_display_name(expr: &Expr) -> String {
     match expr {
-        Expr::Function { name, args } if is_aggregate_function(name) => {
+        Expr::Function { name, args, .. } if is_aggregate_function(name) => {
             let lower = name.to_lowercase();
             if args.len() == 1 && matches!(&args[0], Expr::Star) {
                 return lower;
@@ -2296,7 +2483,7 @@ fn expr_display_name(expr: &Expr) -> String {
             }
             s
         }
-        Expr::Function { name, args } => {
+        Expr::Function { name, args, .. } => {
             let arg_strs: Vec<String> = args.iter().map(expr_display_name).collect();
             format!("{}({})", name, arg_strs.join(", "))
         }
@@ -2353,7 +2540,7 @@ fn detect_legacy_projection(items: &[SelectItem]) -> Option<LegacyProjection> {
             }
         }
         if let SelectItem::Expr {
-            expr: Expr::Function { name, args },
+            expr: Expr::Function { name, args, .. },
             alias: None,
         } = &items[0]
         {
@@ -2378,7 +2565,7 @@ fn detect_legacy_projection(items: &[SelectItem]) -> Option<LegacyProjection> {
                 }
             }
             if let SelectItem::Expr {
-                expr: Expr::Function { name, args },
+                expr: Expr::Function { name, args, .. },
                 alias: None,
             } = &items[1]
             {
@@ -3164,7 +3351,7 @@ fn is_plain_count_star(items: &[SelectItem]) -> bool {
         && matches!(
             &items[0],
             SelectItem::Expr {
-                expr: Expr::Function { name, args },
+                expr: Expr::Function { name, args, .. },
                 alias: None,
             } if name.eq_ignore_ascii_case("count") && args.len() == 1 && matches!(&args[0], Expr::Star)
         )
@@ -4473,7 +4660,7 @@ pub fn extract_match_filter(
     db: &Database,
 ) -> Result<Option<Vec<String>>> {
     match expr {
-        Expr::Function { name, args } if name.eq_ignore_ascii_case("MATCH") => {
+        Expr::Function { name, args, .. } if name.eq_ignore_ascii_case("MATCH") => {
             if args.len() != 2 {
                 return Err(TensorError::SqlExec(
                     "MATCH() requires exactly 2 arguments: MATCH(column, 'query')".to_string(),
@@ -5047,7 +5234,10 @@ fn execute_explain(db: &Database, session: &mut SqlSession, inner: Statement) ->
             let mut output = plan_output;
 
             // For point lookups, also include storage-level detail
-            if let TableRef::Named(ref table) = from {
+            if let TableRef::Named {
+                name: ref table, ..
+            } = from
+            {
                 let is_doc_only = detect_legacy_projection(items)
                     .map(|l| matches!(l, LegacyProjection::Doc))
                     .unwrap_or(false);
@@ -5582,7 +5772,7 @@ fn resolve_select_target(
         let meta: ViewMetadata = serde_json::from_slice(&bytes)?;
         let view_stmt = parse_sql(&meta.query)?;
         if let Statement::Select {
-            from: TableRef::Named(table),
+            from: TableRef::Named { name: table, .. },
             filter,
             as_of: view_as_of,
             valid_at: view_valid_at,
