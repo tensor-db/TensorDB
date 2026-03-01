@@ -250,7 +250,7 @@ impl<'a> EvalContext<'a> {
                 let v = self.eval(inner)?;
                 Ok(SqlValue::Bool(!v.is_truthy()))
             }
-            Expr::Function { name, args } => eval_scalar_function(name, args, self),
+            Expr::Function { name, args, .. } => eval_scalar_function(name, args, self),
             Expr::IsNull { expr, negated } => {
                 let v = self.eval(expr)?;
                 let is_null = matches!(v, SqlValue::Null);

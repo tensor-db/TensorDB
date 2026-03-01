@@ -368,3 +368,147 @@ fn transaction_scan_sees_staged_writes() {
         other => panic!("unexpected: {other:?}"),
     }
 }
+
+// --- Fix: Implicit table aliases (FROM users u) ---
+
+#[test]
+fn implicit_table_alias_from() {
+    let (_dir, db) = setup_db();
+    db.sql("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, role TEXT);")
+        .unwrap();
+    db.sql("INSERT INTO users (id, name, role) VALUES (1, 'alice', 'admin');")
+        .unwrap();
+    db.sql("INSERT INTO users (id, name, role) VALUES (2, 'bob', 'user');")
+        .unwrap();
+
+    // Implicit alias: FROM users u (no AS keyword)
+    let result = db
+        .sql("SELECT u.name FROM users u WHERE u.role = 'admin';")
+        .unwrap();
+    match result {
+        SqlResult::Rows(rows) => {
+            assert_eq!(rows.len(), 1);
+            let s = String::from_utf8(rows[0].clone()).unwrap();
+            assert!(s.contains("alice"), "expected alice, got: {s}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn implicit_alias_join() {
+    let (_dir, db) = setup_db();
+    db.sql("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
+        .unwrap();
+    db.sql("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount REAL);")
+        .unwrap();
+    db.sql("INSERT INTO users (id, name) VALUES (1, 'alice');")
+        .unwrap();
+    db.sql("INSERT INTO orders (id, user_id, amount) VALUES (101, 1, 50.0);")
+        .unwrap();
+
+    // Implicit alias on JOIN: users u JOIN orders o
+    let result = db
+        .sql("SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id;")
+        .unwrap();
+    match result {
+        SqlResult::Rows(rows) => {
+            assert_eq!(rows.len(), 1);
+            let s = String::from_utf8(rows[0].clone()).unwrap();
+            assert!(
+                s.contains("alice"),
+                "expected alice in join result, got: {s}"
+            );
+            assert!(s.contains("50"), "expected 50 in join result, got: {s}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn explicit_as_alias_still_works() {
+    let (_dir, db) = setup_db();
+    db.sql("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
+        .unwrap();
+    db.sql("INSERT INTO users (id, name) VALUES (1, 'alice');")
+        .unwrap();
+
+    // Explicit alias: FROM users AS u
+    let result = db.sql("SELECT u.name FROM users AS u;").unwrap();
+    match result {
+        SqlResult::Rows(rows) => {
+            assert_eq!(rows.len(), 1);
+            let s = String::from_utf8(rows[0].clone()).unwrap();
+            assert!(s.contains("alice"), "expected alice, got: {s}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+// --- Fix: COUNT(DISTINCT col) ---
+
+#[test]
+fn count_distinct() {
+    let (_dir, db) = setup_db();
+    db.sql("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount REAL);")
+        .unwrap();
+    db.sql("INSERT INTO orders (id, user_id, amount) VALUES (1, 1, 10.0);")
+        .unwrap();
+    db.sql("INSERT INTO orders (id, user_id, amount) VALUES (2, 1, 20.0);")
+        .unwrap();
+    db.sql("INSERT INTO orders (id, user_id, amount) VALUES (3, 2, 30.0);")
+        .unwrap();
+    db.sql("INSERT INTO orders (id, user_id, amount) VALUES (4, 3, 40.0);")
+        .unwrap();
+
+    // COUNT(DISTINCT user_id) should return 3 (users 1, 2, 3)
+    let result = db
+        .sql("SELECT COUNT(DISTINCT user_id) FROM orders;")
+        .unwrap();
+    match result {
+        SqlResult::Rows(rows) => {
+            assert_eq!(rows.len(), 1);
+            let s = String::from_utf8(rows[0].clone()).unwrap();
+            assert!(s.contains("3"), "expected count=3 distinct users, got: {s}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    // Regular COUNT should return 4
+    let result = db.sql("SELECT COUNT(user_id) FROM orders;").unwrap();
+    match result {
+        SqlResult::Rows(rows) => {
+            let s = String::from_utf8(rows[0].clone()).unwrap();
+            assert!(s.contains("4"), "expected count=4, got: {s}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+// --- Fix: Multi-column GROUP BY with qualified names ---
+
+#[test]
+fn group_by_with_qualified_names() {
+    let (_dir, db) = setup_db();
+    db.sql(
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, status TEXT, amount REAL);",
+    )
+    .unwrap();
+    db.sql("INSERT INTO orders (id, user_id, status, amount) VALUES (1, 1, 'shipped', 10.0);")
+        .unwrap();
+    db.sql("INSERT INTO orders (id, user_id, status, amount) VALUES (2, 1, 'shipped', 20.0);")
+        .unwrap();
+    db.sql("INSERT INTO orders (id, user_id, status, amount) VALUES (3, 2, 'pending', 30.0);")
+        .unwrap();
+
+    // Multi-column GROUP BY with table-qualified names using alias
+    let result = db
+        .sql("SELECT o.user_id, o.status, COUNT(*) FROM orders o GROUP BY o.user_id, o.status;")
+        .unwrap();
+    match result {
+        SqlResult::Rows(rows) => {
+            assert_eq!(rows.len(), 2, "expected 2 groups, got: {}", rows.len());
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}

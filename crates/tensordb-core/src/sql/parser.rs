@@ -20,6 +20,7 @@ pub enum Expr {
     Function {
         name: String,
         args: Vec<Expr>,
+        distinct: bool,
     },
     Star,
     IsNull {
@@ -112,7 +113,10 @@ pub struct CteClause {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableRef {
-    Named(String),
+    Named {
+        name: String,
+        alias: Option<String>,
+    },
     Subquery {
         query: Box<Statement>,
         alias: String,
@@ -773,7 +777,7 @@ impl Parser {
         };
 
         let table = match &from {
-            TableRef::Named(t) => t.clone(),
+            TableRef::Named { name: t, .. } => t.clone(),
             _ => {
                 return Err(TensorError::SqlParse(
                     "CREATE VIEW requires simple table reference".to_string(),
@@ -1434,7 +1438,37 @@ impl Parser {
                 };
                 Ok(TableRef::TableFunction { name, args, alias })
             } else {
-                Ok(TableRef::Named(name))
+                // Check for optional alias: table_name AS alias or table_name alias
+                // But NOT "AS OF" which is temporal clause syntax
+                let alias = if self.peek_kw("AS") && !self.peek_kw_at(1, "OF") {
+                    self.expect_kw("AS")?;
+                    Some(self.expect_ident()?)
+                } else if self.peek_ident()
+                    && !self.peek_kw("WHERE")
+                    && !self.peek_kw("ORDER")
+                    && !self.peek_kw("LIMIT")
+                    && !self.peek_kw("GROUP")
+                    && !self.peek_kw("HAVING")
+                    && !self.peek_kw("JOIN")
+                    && !self.peek_kw("INNER")
+                    && !self.peek_kw("LEFT")
+                    && !self.peek_kw("RIGHT")
+                    && !self.peek_kw("CROSS")
+                    && !self.peek_kw("UNION")
+                    && !self.peek_kw("INTERSECT")
+                    && !self.peek_kw("EXCEPT")
+                    && !self.peek_kw("ON")
+                    && !self.peek_kw("SET")
+                    && !self.peek_kw("VALUES")
+                    && !self.peek_kw("FOR")
+                    && !self.peek_kw("AS")
+                    && !self.peek_kw("VALID")
+                {
+                    Some(self.expect_ident()?)
+                } else {
+                    None
+                };
+                Ok(TableRef::Named { name, alias })
             }
         }
     }
@@ -1469,7 +1503,29 @@ impl Parser {
         };
 
         let right_table = self.expect_ident()?;
-        let right_alias = None;
+        let right_alias = if self.peek_kw("AS") {
+            self.expect_kw("AS")?;
+            Some(self.expect_ident()?)
+        } else if self.peek_ident()
+            && !self.peek_kw("ON")
+            && !self.peek_kw("WHERE")
+            && !self.peek_kw("ORDER")
+            && !self.peek_kw("GROUP")
+            && !self.peek_kw("HAVING")
+            && !self.peek_kw("LIMIT")
+            && !self.peek_kw("JOIN")
+            && !self.peek_kw("INNER")
+            && !self.peek_kw("LEFT")
+            && !self.peek_kw("RIGHT")
+            && !self.peek_kw("CROSS")
+            && !self.peek_kw("UNION")
+            && !self.peek_kw("INTERSECT")
+            && !self.peek_kw("EXCEPT")
+        {
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
 
         let on_clause = if join_type == JoinType::Cross {
             None
@@ -1482,7 +1538,7 @@ impl Parser {
                 self.expect_ident_eq("pk")?;
                 // Old-style: just "pk" means pk=pk
                 let left_name = match left_table {
-                    TableRef::Named(n) => n.clone(),
+                    TableRef::Named { name: n, .. } => n.clone(),
                     _ => "left".to_string(),
                 };
                 Some(Expr::BinOp {
@@ -1957,6 +2013,7 @@ impl Parser {
             return Ok(Expr::Function {
                 name: "MATCH".to_string(),
                 args,
+                distinct: false,
             });
         }
 
@@ -1968,7 +2025,13 @@ impl Parser {
             if self.peek_symbol('(') {
                 self.expect_symbol('(')?;
                 let mut args = Vec::new();
+                let mut fn_distinct = false;
                 if !self.peek_symbol(')') {
+                    // Check for DISTINCT keyword inside function call: COUNT(DISTINCT col)
+                    if self.peek_kw("DISTINCT") {
+                        self.expect_kw("DISTINCT")?;
+                        fn_distinct = true;
+                    }
                     args.push(self.parse_expr()?);
                     while self.peek_symbol(',') {
                         self.expect_symbol(',')?;
@@ -2033,7 +2096,11 @@ impl Parser {
                     });
                 }
 
-                return Ok(Expr::Function { name: ident, args });
+                return Ok(Expr::Function {
+                    name: ident,
+                    args,
+                    distinct: fn_distinct,
+                });
             }
 
             // Qualified reference: ident.field or ident.field.field
@@ -2471,7 +2538,7 @@ fn expr_contains_window(expr: &Expr) -> bool {
 
 fn expr_contains_aggregate(expr: &Expr) -> bool {
     match expr {
-        Expr::Function { name, args } => {
+        Expr::Function { name, args, .. } => {
             if is_aggregate_function(name) {
                 return true;
             }

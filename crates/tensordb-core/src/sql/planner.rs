@@ -423,7 +423,7 @@ fn plan_select(
     stats: Option<&PlannerStats>,
 ) -> Option<PlanNode> {
     let table = match from {
-        TableRef::Named(t) => t.clone(),
+        TableRef::Named { name: t, .. } => t.clone(),
         TableRef::Subquery { .. } | TableRef::TableFunction { .. } => return None, // dynamic subqueries/table functions — skip planning
     };
 
@@ -651,7 +651,10 @@ mod tests {
     fn plan_point_lookup() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named("users".to_string()),
+            from: TableRef::Named {
+                name: "users".to_string(),
+                alias: None,
+            },
             items: vec![SelectItem::AllColumns],
             joins: vec![],
             filter: Some(Expr::BinOp {
@@ -680,7 +683,10 @@ mod tests {
     fn plan_full_scan_with_filter() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named("orders".to_string()),
+            from: TableRef::Named {
+                name: "orders".to_string(),
+                alias: None,
+            },
             items: vec![SelectItem::AllColumns],
             joins: vec![],
             filter: Some(Expr::BinOp {
@@ -708,7 +714,10 @@ mod tests {
     fn plan_with_order_by_and_limit() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named("events".to_string()),
+            from: TableRef::Named {
+                name: "events".to_string(),
+                alias: None,
+            },
             items: vec![SelectItem::AllColumns],
             joins: vec![],
             filter: None,
@@ -732,7 +741,10 @@ mod tests {
     fn plan_aggregate_with_group_by() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named("sales".to_string()),
+            from: TableRef::Named {
+                name: "sales".to_string(),
+                alias: None,
+            },
             items: vec![
                 SelectItem::Expr {
                     expr: Expr::Column("region".to_string()),
@@ -742,6 +754,7 @@ mod tests {
                     expr: Expr::Function {
                         name: "SUM".to_string(),
                         args: vec![Expr::Column("amount".to_string())],
+                        distinct: false,
                     },
                     alias: Some("total".to_string()),
                 },
@@ -767,7 +780,10 @@ mod tests {
     fn explain_plan_output() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named("t".to_string()),
+            from: TableRef::Named {
+                name: "t".to_string(),
+                alias: None,
+            },
             items: vec![SelectItem::AllColumns],
             joins: vec![],
             filter: None,
