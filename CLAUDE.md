@@ -87,7 +87,7 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 
 - **EOAC Transactions** — `global_epoch: Arc<AtomicU64>` incremented per commit. Incomplete transactions (missing TXN_COMMIT marker) are rolled back on recovery.
 - **MVCC** — Reads filter by `commit_ts` for snapshot isolation. Temporal queries: `AS OF` (system time), `VALID AT` (business time).
-- **AI Runtime** (`crates/tensordb-core/src/ai/`) — Separate thread receiving `ChangeEvent`s, batching (20ms window, max 16 events), synthesizing insights stored under `__ai/` prefix. Includes embedded LLM (Qwen3 0.6B via llama-cpp-2, feature-gated).
+- **AI Runtime** (`crates/tensordb-core/src/ai/`) — Separate thread receiving `ChangeEvent`s, batching (20ms window, max 16 events), synthesizing insights stored under `__ai/` prefix. Includes embedded LLM (Qwen3 0.6B via pure-Rust native inference engine: GGUF loader, BPE tokenizer, transformer runtime, SQL grammar decoder, schema cache with KV prefix reuse; feature-gated behind `llm`).
 - **CDC** (`crates/tensordb-core/src/cdc/`) — Durable cursors with at-least-once delivery, consumer groups with rebalancing.
 - **Auth/RBAC** (`crates/tensordb-core/src/auth/`) — Users, roles (admin/reader/writer), sessions with TTL, table-level privileges.
 

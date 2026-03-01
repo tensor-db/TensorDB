@@ -14,7 +14,7 @@ native = ["dep:tensordb-native"]
 simd = []
 io-uring = ["dep:io-uring"]
 parquet = ["dep:parquet", "dep:arrow"]
-llm = ["dep:llama-cpp-2", "dep:encoding_rs", "dep:dirs", "dep:ureq"]
+llm = ["dep:dirs", "dep:ureq"]
 encryption = ["dep:aes-gcm"]
 
 [dependencies]
@@ -36,8 +36,6 @@ tensordb-native = { path = "../tensordb-native", optional = true }
 io-uring = { version = "0.7", optional = true }
 parquet = { version = "54", optional = true, default-features = false, features = ["arrow"] }
 arrow = { version = "54", optional = true, default-features = false, features = ["json"] }
-llama-cpp-2 = { version = "0.1.133", optional = true }
-encoding_rs = { version = "0.8", optional = true }
 dirs = { version = "5", optional = true }
 ureq = { version = "2", optional = true }
 

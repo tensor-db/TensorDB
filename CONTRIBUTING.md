@@ -15,7 +15,7 @@ Thanks for your interest in contributing.
 # Build (pure Rust, default)
 cargo build
 
-# Run all tests (224+ integration tests)
+# Run all tests (740+ tests across 35 suites)
 cargo test --workspace --all-targets
 
 # With C++ acceleration
@@ -50,6 +50,7 @@ cargo bench --bench multi_engine
 | `tensordb-cli` | Interactive shell with TAB completion and output modes |
 | `tensordb-server` | PostgreSQL wire protocol server (pgwire) |
 | `tensordb-native` | Optional C++ acceleration via cxx (behind `--features native`) |
+| `tensordb-distributed` | Horizontal scaling: shard routing, 2PC transactions, rebalancing |
 | `tensordb-python` | Python bindings via PyO3/maturin |
 | `tensordb-node` | Node.js bindings via napi-rs |
 

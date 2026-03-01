@@ -1,19 +1,34 @@
+//! NativeLlmEngine — pure-Rust inference for NL-to-SQL translation.
+//!
+//! Replaces the llama-cpp-2 dependency with a custom GGUF loader, BPE tokenizer,
+//! Qwen2 transformer runtime, and constrained SQL grammar decoder.
+//!
+//! Key optimizations over the previous implementation:
+//! - **Schema cache**: TTL-based caching of schema context avoids re-running
+//!   SHOW TABLES + DESCRIBE on every `ask()` call.
+//! - **KV cache prefix reuse**: The system prompt + schema prefix KV cache state
+//!   is preserved across calls, avoiding redundant forward passes.
+//! - **Constrained decoding**: SQL grammar decoder biases generation toward valid SQL.
+//! - **Pure Rust**: No C++ dependencies (llama.cpp), simpler build, easier cross-compilation.
+
 use std::io::Write;
-use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel};
-use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 
 use crate::error::{Result, TensorError};
 
+use super::gguf::GgufFile;
+use super::sampler::Sampler;
+use super::schema_cache::SchemaCache;
+use super::sql_grammar::SqlGrammarDecoder;
+use super::tokenizer::BpeTokenizer;
+use super::transformer::{KvCache, ModelConfig, TransformerModel};
+
 const DEFAULT_MAX_TOKENS: usize = 256;
+const DEFAULT_CONTEXT_SIZE: usize = 2048;
+const DEFAULT_SCHEMA_CACHE_TTL_SECS: u64 = 60;
 const MODEL_FILENAME: &str = "Qwen3-0.6B-Q8_0.gguf";
 const MODEL_URL: &str =
     "https://github.com/tensor-db/TensorDB/releases/download/v0.2.0-model/Qwen3-0.6B-Q8_0.gguf";
@@ -28,20 +43,30 @@ Table names are plain identifiers — never use schema-qualified names like sche
 Output ONLY a single SQL statement, nothing else — no explanation, no markdown. /no_think";
 
 struct LoadedModel {
-    backend: LlamaBackend,
-    model: LlamaModel,
+    model: TransformerModel,
+    tokenizer: BpeTokenizer,
+    grammar: SqlGrammarDecoder,
+    config: ModelConfig,
 }
-
-// Safety: LlamaBackend and LlamaModel are thread-safe (the C library uses internal locking).
-// We wrap them in a Mutex<Option<>> anyway, so concurrent access is serialized.
-unsafe impl Send for LoadedModel {}
-unsafe impl Sync for LoadedModel {}
 
 pub struct LlmEngine {
     inner: Mutex<Option<LoadedModel>>,
     model_path: PathBuf,
     loaded: AtomicBool,
     max_tokens: usize,
+    context_size: usize,
+    schema_cache: SchemaCache,
+    grammar_constrained: bool,
+    /// Cached KV state for the system prompt prefix (reused across calls with same schema)
+    prefix_kv_cache: Mutex<Option<PrefixKvState>>,
+    kv_cache_prefix_enabled: bool,
+}
+
+/// Cached KV state for the system prompt + schema prefix.
+struct PrefixKvState {
+    kv_cache: KvCache,
+    prefix_token_count: usize,
+    schema_text_hash: u64,
 }
 
 impl LlmEngine {
@@ -51,11 +76,39 @@ impl LlmEngine {
             model_path,
             loaded: AtomicBool::new(false),
             max_tokens: DEFAULT_MAX_TOKENS,
+            context_size: DEFAULT_CONTEXT_SIZE,
+            schema_cache: SchemaCache::new(DEFAULT_SCHEMA_CACHE_TTL_SECS),
+            grammar_constrained: true,
+            prefix_kv_cache: Mutex::new(None),
+            kv_cache_prefix_enabled: true,
         }
     }
 
     pub fn with_max_tokens(mut self, max_tokens: usize) -> Self {
         self.max_tokens = max_tokens;
+        self
+    }
+
+    pub fn with_context_size(mut self, context_size: usize) -> Self {
+        self.context_size = context_size;
+        self
+    }
+
+    pub fn with_schema_cache_ttl(self, ttl_secs: u64) -> Self {
+        // Replace the schema cache with new TTL (must rebuild since SchemaCache isn't Clone)
+        Self {
+            schema_cache: SchemaCache::new(ttl_secs),
+            ..self
+        }
+    }
+
+    pub fn with_grammar_constrained(mut self, enabled: bool) -> Self {
+        self.grammar_constrained = enabled;
+        self
+    }
+
+    pub fn with_kv_cache_prefix(mut self, enabled: bool) -> Self {
+        self.kv_cache_prefix_enabled = enabled;
         self
     }
 
@@ -75,26 +128,27 @@ impl LlmEngine {
             Self::download_model(&self.model_path)?;
         }
 
-        // Suppress verbose llama.cpp logs (layer info, graph reserves, etc.)
-        llama_cpp_2::send_logs_to_tracing(
-            llama_cpp_2::LogOptions::default().with_logs_enabled(false),
-        );
+        // Load GGUF file
+        let gguf = GgufFile::open(&self.model_path)?;
 
-        let backend = LlamaBackend::init()
-            .map_err(|e| TensorError::LlmError(format!("failed to init llama backend: {e}")))?;
+        // Extract model config
+        let config = ModelConfig::from_gguf(&gguf)?;
 
-        let model_params = LlamaModelParams::default();
-        let model_params = std::pin::pin!(model_params);
+        // Load tokenizer
+        let tokenizer = BpeTokenizer::from_gguf(&gguf)?;
 
-        let model =
-            LlamaModel::load_from_file(&backend, &self.model_path, &model_params).map_err(|e| {
-                TensorError::LlmError(format!(
-                    "failed to load model {}: {e}",
-                    self.model_path.display()
-                ))
-            })?;
+        // Build grammar decoder
+        let grammar = SqlGrammarDecoder::new(&tokenizer, self.grammar_constrained);
 
-        *guard = Some(LoadedModel { backend, model });
+        // Load transformer model
+        let model = TransformerModel::from_gguf(&gguf, &config)?;
+
+        *guard = Some(LoadedModel {
+            model,
+            tokenizer,
+            grammar,
+            config,
+        });
         self.loaded.store(true, Ordering::Release);
         Ok(())
     }
@@ -173,85 +227,70 @@ impl LlmEngine {
         let guard = self.inner.lock();
         let loaded = guard.as_ref().ok_or(TensorError::LlmNotAvailable)?;
 
-        let ctx_params =
-            LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(2048).unwrap()));
-
-        let mut ctx = loaded
-            .model
-            .new_context(&loaded.backend, ctx_params)
-            .map_err(|e| TensorError::LlmError(format!("failed to create context: {e}")))?;
-
-        // Tokenize the prompt
-        let tokens = loaded
-            .model
-            .str_to_token(prompt, AddBos::Always)
-            .map_err(|e| TensorError::LlmError(format!("tokenization failed: {e}")))?;
-
+        let tokens = loaded.tokenizer.encode(prompt);
         if tokens.is_empty() {
             return Err(TensorError::LlmError(
                 "prompt tokenized to empty sequence".to_string(),
             ));
         }
 
-        // Feed prompt tokens into context
-        let mut batch = LlamaBatch::new(512, 1);
-        let last_index = (tokens.len() - 1) as i32;
-        for (i, token) in (0i32..).zip(tokens.iter()) {
-            batch
-                .add(*token, i, &[0], i == last_index)
-                .map_err(|e| TensorError::LlmError(format!("batch add failed: {e}")))?;
-        }
+        let ctx_size = self.context_size;
+        let mut kv_cache = KvCache::new(
+            loaded.config.n_layers,
+            loaded.config.n_kv_heads,
+            loaded.config.head_dim,
+            ctx_size,
+        );
 
-        ctx.decode(&mut batch)
-            .map_err(|e| TensorError::LlmError(format!("initial decode failed: {e}")))?;
+        // Prefill: process all prompt tokens
+        let mut logits = loaded.model.forward_batch(&tokens, 0, &mut kv_cache);
 
         // Generation loop
-        let mut sampler =
-            LlamaSampler::chain_simple([LlamaSampler::dist(1234), LlamaSampler::greedy()]);
+        let mut sampler = Sampler::greedy();
+        let mut output_tokens: Vec<u32> = Vec::new();
+        let mut pos = tokens.len();
 
-        let mut output = String::new();
-        let mut decoder = encoding_rs::UTF_8.new_decoder();
-        let mut n_cur = batch.n_tokens();
-        let n_len = tokens.len() as i32 + max_tokens as i32;
+        for _ in 0..max_tokens {
+            // Apply grammar constraints
+            loaded.grammar.apply(&mut logits);
 
-        while n_cur <= n_len {
-            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-            sampler.accept(token);
+            let token = sampler.sample(&mut logits, &output_tokens);
 
-            if loaded.model.is_eog_token(token) {
+            if loaded.tokenizer.is_eos(token) {
                 break;
             }
 
-            let piece = loaded
-                .model
-                .token_to_piece(token, &mut decoder, true, None)
-                .map_err(|e| TensorError::LlmError(format!("token decode failed: {e}")))?;
+            output_tokens.push(token);
 
-            output.push_str(&piece);
-
-            // Early stop: once we have a semicolon followed by a newline
-            if output.contains(';') && piece.contains('\n') {
-                break;
+            // Early stop: semicolon followed by newline
+            let piece = loaded.tokenizer.decode(&[token]);
+            if piece.contains('\n') {
+                let output_so_far = loaded.tokenizer.decode(&output_tokens);
+                if output_so_far.contains(';') {
+                    break;
+                }
             }
 
-            batch.clear();
-            batch
-                .add(token, n_cur, &[0], true)
-                .map_err(|e| TensorError::LlmError(format!("batch add failed: {e}")))?;
+            if pos >= ctx_size - 1 {
+                break; // Context window full
+            }
 
-            ctx.decode(&mut batch)
-                .map_err(|e| TensorError::LlmError(format!("decode failed: {e}")))?;
-
-            n_cur += 1;
+            // Forward pass for the new token
+            logits = loaded.model.forward(token, pos, &mut kv_cache);
+            pos += 1;
         }
 
+        let output = loaded.tokenizer.decode(&output_tokens);
         Ok(output.trim().to_string())
     }
 
     pub fn nl_to_sql(&self, question: &str, schema_context: &str) -> Result<String> {
-        // Build a ChatML-style prompt (Qwen3 instruct format).
-        // The fine-tuned model handles TensorDB-specific SQL (SHOW TABLES, DESCRIBE,
-        // temporal queries, etc.) without few-shot examples.
+        self.ensure_loaded()?;
+
+        let guard = self.inner.lock();
+        let loaded = guard.as_ref().ok_or(TensorError::LlmNotAvailable)?;
+
+        // Build ChatML prompt
         let user_content = if schema_context.is_empty() {
             format!("Question: {question}")
         } else {
@@ -263,9 +302,100 @@ impl LlmEngine {
              <|im_start|>assistant\n"
         );
 
-        let raw = self.generate(&prompt, self.max_tokens)?;
+        let ctx_size = self.context_size;
 
-        // Clean up: strip markdown fences if present, extract SQL
+        // Check for KV cache prefix reuse
+        let schema_hash = simple_hash(schema_context.as_bytes());
+
+        let (mut kv_cache, start_pos, logits) =
+            if self.kv_cache_prefix_enabled && !schema_context.is_empty() {
+                let prefix_guard = self.prefix_kv_cache.lock();
+                if let Some(ref prefix_state) = *prefix_guard {
+                    if prefix_state.schema_text_hash == schema_hash {
+                        // Cache hit! Reuse the KV cache from the prefix
+                        let mut kv = prefix_state.kv_cache.clone_state();
+                        let start = prefix_state.prefix_token_count;
+
+                        // Only tokenize and process the user question part
+                        let suffix = format!(
+                            "<|im_start|>user\n{user_content}<|im_end|>\n\
+                             <|im_start|>assistant\n"
+                        );
+                        let suffix_tokens = loaded.tokenizer.encode(&suffix);
+
+                        // Forward pass for suffix tokens only
+                        let logits = loaded.model.forward_batch(&suffix_tokens, start, &mut kv);
+
+                        drop(prefix_guard);
+                        return self.generate_sql_from_logits(
+                            loaded,
+                            logits,
+                            &mut kv,
+                            start + suffix_tokens.len(),
+                            ctx_size,
+                        );
+                    }
+                }
+                drop(prefix_guard);
+
+                // Cache miss — process prefix first, cache it, then continue
+                let full_tokens = loaded.tokenizer.encode(&prompt);
+                let mut kv = KvCache::new(
+                    loaded.config.n_layers,
+                    loaded.config.n_kv_heads,
+                    loaded.config.head_dim,
+                    ctx_size,
+                );
+
+                // Compute prefix tokens (system prompt + schema)
+                let prefix_prompt = format!(
+                    "<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n\
+                     <|im_start|>user\nSchema:\n{schema_context}\n\n"
+                );
+                let prefix_tokens = loaded.tokenizer.encode(&prefix_prompt);
+                let prefix_len = prefix_tokens.len();
+
+                // Process prefix tokens first
+                let _ = loaded.model.forward_batch(&prefix_tokens, 0, &mut kv);
+
+                // Cache the prefix KV state for future reuse (clone before continuing)
+                let kv_for_cache = kv.clone_state();
+                let mut prefix_guard = self.prefix_kv_cache.lock();
+                *prefix_guard = Some(PrefixKvState {
+                    kv_cache: kv_for_cache,
+                    prefix_token_count: prefix_len,
+                    schema_text_hash: schema_hash,
+                });
+                drop(prefix_guard);
+
+                // Continue processing the remaining suffix tokens
+                let suffix_tokens = &full_tokens[prefix_len..];
+                let logits = if suffix_tokens.is_empty() {
+                    // Edge case: prompt is exactly the prefix
+                    loaded.model.forward_batch(&prefix_tokens, 0, &mut kv)
+                } else {
+                    loaded
+                        .model
+                        .forward_batch(suffix_tokens, prefix_len, &mut kv)
+                };
+
+                (kv, full_tokens.len(), logits)
+            } else {
+                // No prefix caching — process full prompt
+                let full_tokens = loaded.tokenizer.encode(&prompt);
+                let mut kv = KvCache::new(
+                    loaded.config.n_layers,
+                    loaded.config.n_kv_heads,
+                    loaded.config.head_dim,
+                    ctx_size,
+                );
+                let logits = loaded.model.forward_batch(&full_tokens, 0, &mut kv);
+                (kv, full_tokens.len(), logits)
+            };
+
+        let raw =
+            self.generate_sql_from_logits(loaded, logits, &mut kv_cache, start_pos, ctx_size)?;
+
         let sql = clean_sql_output(&raw);
 
         if sql.is_empty() {
@@ -274,6 +404,75 @@ impl LlmEngine {
 
         Ok(sql)
     }
+
+    /// Generate SQL tokens from logits, using grammar constraints and sampling.
+    fn generate_sql_from_logits(
+        &self,
+        loaded: &LoadedModel,
+        mut logits: Vec<f32>,
+        kv_cache: &mut KvCache,
+        start_pos: usize,
+        ctx_size: usize,
+    ) -> Result<String> {
+        let mut sampler = Sampler::greedy();
+        let mut output_tokens: Vec<u32> = Vec::new();
+        let mut pos = start_pos;
+
+        for _ in 0..self.max_tokens {
+            // Apply grammar constraints
+            loaded.grammar.apply(&mut logits);
+
+            let token = sampler.sample(&mut logits, &output_tokens);
+
+            if loaded.tokenizer.is_eos(token) {
+                break;
+            }
+
+            output_tokens.push(token);
+
+            // Early stop: semicolon followed by newline
+            let piece = loaded.tokenizer.decode(&[token]);
+            if piece.contains('\n') {
+                let output_so_far = loaded.tokenizer.decode(&output_tokens);
+                if output_so_far.contains(';') {
+                    break;
+                }
+            }
+
+            if pos >= ctx_size - 1 {
+                break;
+            }
+
+            logits = loaded.model.forward(token, pos, kv_cache);
+            pos += 1;
+        }
+
+        let output = loaded.tokenizer.decode(&output_tokens);
+        Ok(output.trim().to_string())
+    }
+
+    /// Invalidate the schema cache. Called after DDL statements.
+    pub fn invalidate_schema_cache(&self) {
+        self.schema_cache.invalidate();
+        // Also invalidate prefix KV cache since schema changed
+        let mut prefix_guard = self.prefix_kv_cache.lock();
+        *prefix_guard = None;
+    }
+
+    /// Get a reference to the schema cache.
+    pub fn schema_cache(&self) -> &SchemaCache {
+        &self.schema_cache
+    }
+}
+
+/// Simple non-cryptographic hash for schema text comparison.
+fn simple_hash(data: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
+    for &b in data {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3); // FNV prime
+    }
+    h
 }
 
 /// SQL keywords that mark the start of a statement.
@@ -291,15 +490,12 @@ fn clean_sql_output(raw: &str) -> String {
     }
 
     // Handle Qwen3 thinking blocks: <think>...</think>
-    // First try to get content AFTER </think>, but if the think block is unclosed
-    // (model hit max tokens), fall back to extracting SQL from within it.
     let think_content = if let Some(start) = s.find("<think>") {
         if let Some(end) = s.find("</think>") {
             let inside = s[start + 7..end].to_string();
             s = format!("{}{}", &s[..start], &s[end + 8..]);
             Some(inside)
         } else {
-            // Unclosed think tag — save the content for fallback extraction
             let inside = s[start + 7..].to_string();
             s = s[..start].to_string();
             Some(inside)
@@ -310,7 +506,6 @@ fn clean_sql_output(raw: &str) -> String {
 
     let result = extract_sql_from_text(&s);
 
-    // If we got nothing from the main text, try extracting SQL from inside the think block
     if result.is_empty() {
         if let Some(ref think_text) = think_content {
             return extract_sql_from_text(think_text);
@@ -320,11 +515,9 @@ fn clean_sql_output(raw: &str) -> String {
     result
 }
 
-/// Extract a SQL statement from text, handling markdown fences, preamble, etc.
 fn extract_sql_from_text(text: &str) -> String {
     let s = text.trim();
 
-    // Strip markdown code fences
     let s = if s.starts_with("```sql") {
         s.strip_prefix("```sql").unwrap_or(s)
     } else if s.starts_with("```") {
@@ -334,7 +527,6 @@ fn extract_sql_from_text(text: &str) -> String {
     };
     let s = s.strip_suffix("```").unwrap_or(s).trim();
 
-    // If the output has preamble text (e.g. "Answer: SELECT ..."), find the first SQL keyword
     let upper = s.to_uppercase();
     let sql_start = SQL_KEYWORDS.iter().filter_map(|kw| upper.find(kw)).min();
 
@@ -343,7 +535,6 @@ fn extract_sql_from_text(text: &str) -> String {
         _ => s,
     };
 
-    // Take only the first SQL statement (up to and including the first semicolon)
     if let Some(pos) = s.find(';') {
         s[..pos].trim().to_string()
     } else {
@@ -357,6 +548,9 @@ impl std::fmt::Debug for LlmEngine {
             .field("model_path", &self.model_path)
             .field("loaded", &self.loaded.load(Ordering::Relaxed))
             .field("max_tokens", &self.max_tokens)
+            .field("context_size", &self.context_size)
+            .field("grammar_constrained", &self.grammar_constrained)
+            .field("kv_cache_prefix", &self.kv_cache_prefix_enabled)
             .finish()
     }
 }
@@ -424,7 +618,6 @@ mod tests {
 
     #[test]
     fn clean_sql_extracts_from_unclosed_think() {
-        // When model hits max tokens inside a think block, extract SQL from within it
         assert_eq!(
             clean_sql_output(
                 "<think>\nThe SQL should be SELECT COUNT(*) FROM users WHERE balance > 500;"
@@ -447,5 +640,19 @@ mod tests {
             clean_sql_output("SELECT * FROM users; -- this lists all users"),
             "SELECT * FROM users"
         );
+    }
+
+    #[test]
+    fn simple_hash_deterministic() {
+        let h1 = simple_hash(b"hello world");
+        let h2 = simple_hash(b"hello world");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn simple_hash_differs() {
+        let h1 = simple_hash(b"schema_v1");
+        let h2 = simple_hash(b"schema_v2");
+        assert_ne!(h1, h2);
     }
 }

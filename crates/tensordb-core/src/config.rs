@@ -32,6 +32,14 @@ pub struct Config {
     pub llm_model_path: Option<String>,
     /// Max tokens for LLM generation (default: 256).
     pub llm_max_tokens: usize,
+    /// Context window size for LLM inference (default: 2048).
+    pub llm_context_size: usize,
+    /// Schema cache TTL in seconds (default: 60). Set to 0 to disable caching.
+    pub llm_schema_cache_ttl_secs: u64,
+    /// Enable SQL grammar-constrained decoding (default: true).
+    pub llm_grammar_constrained: bool,
+    /// Enable KV cache prefix reuse for repeated schema contexts (default: true).
+    pub llm_kv_cache_prefix: bool,
     // Encryption at rest
     /// Passphrase for AES-256-GCM encryption. If set, SSTable blocks and WAL frames
     /// are encrypted transparently. Requires the `encryption` feature flag.
@@ -76,6 +84,10 @@ impl Default for Config {
             fast_write_wal_batch_interval_us: 1000,
             llm_model_path: None,
             llm_max_tokens: 256,
+            llm_context_size: 2048,
+            llm_schema_cache_ttl_secs: 60,
+            llm_grammar_constrained: true,
+            llm_kv_cache_prefix: true,
             encryption_passphrase: None,
             encryption_key_file: None,
             vector_hnsw_m: 16,

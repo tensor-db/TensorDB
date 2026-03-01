@@ -1,11 +1,23 @@
 pub mod access_stats;
 pub mod cache_advisor;
 pub mod compaction_advisor;
+#[cfg(feature = "llm")]
+pub mod gguf;
 pub mod inference;
 #[cfg(feature = "llm")]
 pub mod llm;
 pub mod ml_pipeline;
 pub mod query_advisor;
+#[cfg(feature = "llm")]
+pub mod sampler;
+#[cfg(feature = "llm")]
+pub mod schema_cache;
+#[cfg(feature = "llm")]
+pub mod sql_grammar;
+#[cfg(feature = "llm")]
+pub mod tokenizer;
+#[cfg(feature = "llm")]
+pub mod transformer;
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};

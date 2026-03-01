@@ -263,8 +263,12 @@ impl Database {
                     })
             };
 
-            let engine =
-                crate::ai::llm::LlmEngine::new(model_path).with_max_tokens(config.llm_max_tokens);
+            let engine = crate::ai::llm::LlmEngine::new(model_path)
+                .with_max_tokens(config.llm_max_tokens)
+                .with_context_size(config.llm_context_size)
+                .with_schema_cache_ttl(config.llm_schema_cache_ttl_secs)
+                .with_grammar_constrained(config.llm_grammar_constrained)
+                .with_kv_cache_prefix(config.llm_kv_cache_prefix);
             Some(Arc::new(engine))
         };
 
@@ -454,7 +458,23 @@ impl Database {
     }
 
     pub fn sql(&self, query: &str) -> Result<SqlResult> {
-        execute_sql(self, query)
+        let result = execute_sql(self, query)?;
+
+        // Invalidate LLM schema cache after DDL statements
+        #[cfg(feature = "llm")]
+        {
+            let upper = query.trim().to_uppercase();
+            if upper.starts_with("CREATE ")
+                || upper.starts_with("DROP ")
+                || upper.starts_with("ALTER ")
+            {
+                if let Some(ref llm) = self.llm {
+                    llm.invalidate_schema_cache();
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Parse and plan a SQL statement once, returning a prepared statement that
@@ -469,7 +489,9 @@ impl Database {
     pub fn ask(&self, question: &str) -> Result<(String, SqlResult)> {
         let llm = self.llm.as_ref().ok_or(TensorError::LlmNotAvailable)?;
 
-        let schema = self.gather_schema_context()?;
+        let (schema, _) = llm
+            .schema_cache()
+            .get_or_compute(|| self.gather_schema_context_inner(), |_| Vec::new())?;
         let sql = llm.nl_to_sql(question, &schema)?;
         match self.sql(&sql) {
             Ok(result) => Ok((sql, result)),
@@ -498,20 +520,23 @@ impl Database {
     pub fn ask_sql(&self, question: &str) -> Result<String> {
         let llm = self.llm.as_ref().ok_or(TensorError::LlmNotAvailable)?;
 
-        let schema = self.gather_schema_context()?;
+        let (schema, _) = llm
+            .schema_cache()
+            .get_or_compute(|| self.gather_schema_context_inner(), |_| Vec::new())?;
         llm.nl_to_sql(question, &schema)
     }
 
     /// Build a schema context string for the LLM prompt by listing all tables
-    /// and their column definitions.
+    /// and their column definitions. This is the inner implementation used by
+    /// the schema cache.
     #[cfg(feature = "llm")]
-    fn gather_schema_context(&self) -> Result<String> {
+    fn gather_schema_context_inner(&self) -> Result<String> {
         use crate::sql::exec::SqlResult;
 
         let mut ctx = String::new();
 
-        // Get table list
-        let tables_result = self.sql("SHOW TABLES")?;
+        // Get table list — use execute_sql directly to avoid DDL cache invalidation
+        let tables_result = execute_sql(self, "SHOW TABLES")?;
         let table_names: Vec<String> = match tables_result {
             SqlResult::Rows(rows) => rows
                 .into_iter()
@@ -527,7 +552,7 @@ impl Database {
 
         for table in &table_names {
             let describe_sql = format!("DESCRIBE {table}");
-            if let Ok(desc) = self.sql(&describe_sql) {
+            if let Ok(desc) = execute_sql(self, &describe_sql) {
                 ctx.push_str(&format!("Table: {table}\n"));
                 if let SqlResult::Rows(rows) = desc {
                     for row in rows {

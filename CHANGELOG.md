@@ -74,19 +74,30 @@ All notable changes to TensorDB are documented in this file.
 ## [0.2.0] — Embedded LLM: Natural Language → SQL
 
 ### Added
-- Embedded Qwen3-0.6B model for natural language to SQL translation via llama.cpp
+- Embedded Qwen3-0.6B model for natural language to SQL translation via pure-Rust native inference engine
 - `ASK '<question>'` SQL statement — translates NL to SQL and executes in one step
 - `Database::ask()` and `Database::ask_sql()` Rust API methods
 - `PyDatabase.ask()` Python binding returning `{"sql": ..., "result": ...}`
 - `# <question>` prefix in both Rust and Python CLI shells (shows generated SQL, asks to confirm)
 - `LlmEngine` with lazy model loading, greedy sampling, and output cleaning
-- `llm` feature flag (default on) backed by `llama-cpp-2` crate
+- `llm` feature flag (default on) — pure Rust, no C++ dependencies
 - `llm_model_path` and `llm_max_tokens` config fields
 - `LlmNotAvailable` and `LlmError` error variants
 - Schema-aware prompting: gathers table schemas via SHOW TABLES + DESCRIBE before translation
+- **GGUF v3 loader** (`src/ai/gguf.rs`) — mmap-backed zero-copy tensor access, dequantization for Q8_0, Q4_0, F16, F32
+- **BPE tokenizer** (`src/ai/tokenizer.rs`) — vocabulary and merge rules loaded from GGUF metadata, ChatML special tokens
+- **Transformer runtime** (`src/ai/transformer.rs`) — Qwen2 architecture with RMSNorm, GQA attention, RoPE, SwiGLU FFN, KV cache
+- **Token sampler** (`src/ai/sampler.rs`) — greedy (argmax), top-p nucleus sampling, temperature scaling, repetition penalty
+- **SQL grammar decoder** (`src/ai/sql_grammar.rs`) — soft-constraint token filtering that biases generation toward valid SQL
+- **Schema cache** (`src/ai/schema_cache.rs`) — TTL-based schema context caching with DDL invalidation
+- **KV cache prefix reuse** — schema prompt KV state cached and reused across calls for ~3-15x speedup on repeated queries
+- `llm_context_size`, `llm_schema_cache_ttl_secs`, `llm_grammar_constrained`, `llm_kv_cache_prefix` config fields
 
 ### Changed
 - All crate versions bumped to 0.2.0
+- Replaced `llama-cpp-2` C++ FFI dependency with pure-Rust inference engine — no C++ toolchain required
+- Removed `encoding_rs` dependency (using std)
+- DDL statements (CREATE/DROP/ALTER TABLE) now automatically invalidate the LLM schema cache
 
 ## [0.28] — Fast Write Engine
 

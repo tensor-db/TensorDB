@@ -430,7 +430,7 @@ graph TB
 TensorDB is configured through the `Config` struct. All parameters have sensible defaults.
 
 <details>
-<summary><strong>All 22 Configuration Parameters</strong></summary>
+<summary><strong>All 26 Configuration Parameters</strong></summary>
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -456,6 +456,10 @@ TensorDB is configured through the `Config` struct. All parameters have sensible
 | `ai_compaction_advisor` | `bool` | `false` | AI-driven compaction scheduling |
 | `ai_cache_advisor` | `bool` | `false` | AI-driven cache admission/eviction |
 | `ai_access_stats_size` | `usize` | `1024` | Hot-key tracker ring buffer size |
+| `llm_context_size` | `usize` | `2048` | LLM inference context window size |
+| `llm_schema_cache_ttl_secs` | `u64` | `60` | Schema cache TTL for NL-to-SQL (seconds) |
+| `llm_grammar_constrained` | `bool` | `true` | Enable SQL grammar-constrained decoding |
+| `llm_kv_cache_prefix` | `bool` | `true` | Reuse KV cache for repeated schema prefixes |
 
 </details>
 
@@ -466,7 +470,7 @@ tensordb/
 ├── crates/
 │   ├── tensordb-core/           # Database engine (main crate, ~31k lines)
 │   │   └── src/
-│   │       ├── ai/              # AI runtime, inference, ML pipeline, advisors
+│   │       ├── ai/              # AI runtime, native LLM inference (GGUF, BPE, transformer), ML pipeline, advisors
 │   │       ├── engine/          # Database, shard, fast write path, change feeds
 │   │       ├── storage/         # SSTable, WAL, compaction, levels, cache, columnar, group WAL
 │   │       ├── sql/             # Parser, executor, evaluator, planner, vectorized engine
@@ -575,7 +579,7 @@ cd docs && npm install && npm run dev
 - **v0.19–v0.26** — Columnar storage, CDC, event sourcing, auth/RBAC, connection pooling, monitoring, schema evolution
 - **v0.27–v0.28** — Replication foundations, fast write engine
 - **v0.29** — EOAC transactions, PITR, incremental backup, encryption at rest
-- **v0.2.0** — Embedded LLM (Qwen3 0.6B via llama-cpp-2)
+- **v0.2.0** — Embedded LLM (Qwen3 0.6B via pure-Rust native inference engine)
 - **v0.30** — Advanced vector search (VECTOR(n), HNSW/IVF-PQ, hybrid search, temporal vectors), horizontal scaling (tensordb-distributed crate), ecosystem (Docker, CI publish workflows, example apps)
 
 ### Phase 1: Observability & Diagnostics
@@ -628,7 +632,7 @@ Production-hardening for teams running TensorDB in real workloads.
 
 Next-generation AI capabilities tightly integrated with the query engine.
 
-- **Pluggable model backends** — ONNX Runtime, HTTP model servers, and local llama.cpp behind a unified `ModelBackend` trait
+- **Pluggable model backends** — ONNX Runtime, HTTP model servers, and the built-in pure-Rust engine behind a unified `ModelBackend` trait
 - **Anomaly detection** — Automatic detection of unusual write patterns, schema drift, and query performance regressions
 - **Pattern learning** — Learn access patterns over time to auto-tune cache policies, prefetch strategies, and compaction schedules
 - **Inference UDFs** — `SELECT predict(model_name, features...) FROM data` for in-database model inference

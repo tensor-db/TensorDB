@@ -46,6 +46,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sled = "0.34"
 redb = "2"
 fastrand = "2"
+half = "2"
 
 [[bench]]
 name = "basic"
