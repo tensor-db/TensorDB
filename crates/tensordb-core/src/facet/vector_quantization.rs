@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_f16_roundtrip() {
-        let values = vec![1.0_f32, -0.5, 0.0, 3.14];
+        let values = vec![1.0_f32, -0.5, 0.0, 3.125];
         let encoded = quantize_f16(&values);
         let decoded = dequantize_f16(&encoded);
         for (a, b) in values.iter().zip(decoded.iter()) {
