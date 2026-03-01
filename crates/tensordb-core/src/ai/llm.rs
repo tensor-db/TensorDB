@@ -24,7 +24,7 @@ use super::sampler::Sampler;
 use super::schema_cache::SchemaCache;
 use super::sql_grammar::SqlGrammarDecoder;
 use super::tokenizer::BpeTokenizer;
-use super::transformer::{KvCache, ModelConfig, TransformerModel};
+use super::transformer::{ActiveVocab, KvCache, ModelConfig, ScratchBuffers, TransformerModel};
 
 const DEFAULT_MAX_TOKENS: usize = 256;
 const DEFAULT_CONTEXT_SIZE: usize = 2048;
@@ -47,6 +47,8 @@ struct LoadedModel {
     tokenizer: BpeTokenizer,
     grammar: SqlGrammarDecoder,
     config: ModelConfig,
+    scratch: ScratchBuffers,
+    active_vocab: ActiveVocab,
 }
 
 pub struct LlmEngine {
@@ -143,11 +145,18 @@ impl LlmEngine {
         // Load transformer model
         let model = TransformerModel::from_gguf(&gguf, &config)?;
 
+        // Pre-allocate scratch buffers and active vocab for zero-alloc generation
+        let scratch = ScratchBuffers::new(&config);
+        let active_token_ids = grammar.active_token_ids().to_vec();
+        let active_vocab = ActiveVocab::new(active_token_ids, config.vocab_size);
+
         *guard = Some(LoadedModel {
             model,
             tokenizer,
             grammar,
             config,
+            scratch,
+            active_vocab,
         });
         self.loaded.store(true, Ordering::Release);
         Ok(())
@@ -224,8 +233,8 @@ impl LlmEngine {
     pub fn generate(&self, prompt: &str, max_tokens: usize) -> Result<String> {
         self.ensure_loaded()?;
 
-        let guard = self.inner.lock();
-        let loaded = guard.as_ref().ok_or(TensorError::LlmNotAvailable)?;
+        let mut guard = self.inner.lock();
+        let loaded = guard.as_mut().ok_or(TensorError::LlmNotAvailable)?;
 
         let tokens = loaded.tokenizer.encode(prompt);
         if tokens.is_empty() {
@@ -242,8 +251,10 @@ impl LlmEngine {
             ctx_size,
         );
 
-        // Prefill: process all prompt tokens
-        let mut logits = loaded.model.forward_batch(&tokens, 0, &mut kv_cache);
+        // Prefill: process all prompt tokens using scratch buffers
+        loaded
+            .model
+            .forward_batch_into(&tokens, 0, &mut kv_cache, &mut loaded.scratch);
 
         // Generation loop
         let mut sampler = Sampler::greedy();
@@ -252,9 +263,9 @@ impl LlmEngine {
 
         for _ in 0..max_tokens {
             // Apply grammar constraints
-            loaded.grammar.apply(&mut logits);
+            loaded.grammar.apply(&mut loaded.scratch.logits);
 
-            let token = sampler.sample(&mut logits, &output_tokens);
+            let token = sampler.sample(&mut loaded.scratch.logits, &output_tokens);
 
             if loaded.tokenizer.is_eos(token) {
                 break;
@@ -275,8 +286,10 @@ impl LlmEngine {
                 break; // Context window full
             }
 
-            // Forward pass for the new token
-            logits = loaded.model.forward(token, pos, &mut kv_cache);
+            // Forward pass for the new token using scratch buffers
+            loaded
+                .model
+                .forward_into(token, pos, &mut kv_cache, &mut loaded.scratch);
             pos += 1;
         }
 
@@ -287,8 +300,8 @@ impl LlmEngine {
     pub fn nl_to_sql(&self, question: &str, schema_context: &str) -> Result<String> {
         self.ensure_loaded()?;
 
-        let guard = self.inner.lock();
-        let loaded = guard.as_ref().ok_or(TensorError::LlmNotAvailable)?;
+        let mut guard = self.inner.lock();
+        let loaded = guard.as_mut().ok_or(TensorError::LlmNotAvailable)?;
 
         // Build ChatML prompt
         let user_content = if schema_context.is_empty() {
@@ -307,7 +320,7 @@ impl LlmEngine {
         // Check for KV cache prefix reuse
         let schema_hash = simple_hash(schema_context.as_bytes());
 
-        let (mut kv_cache, start_pos, logits) =
+        let (mut kv_cache, start_pos) =
             if self.kv_cache_prefix_enabled && !schema_context.is_empty() {
                 let prefix_guard = self.prefix_kv_cache.lock();
                 if let Some(ref prefix_state) = *prefix_guard {
@@ -323,13 +336,21 @@ impl LlmEngine {
                         );
                         let suffix_tokens = loaded.tokenizer.encode(&suffix);
 
-                        // Forward pass for suffix tokens only
-                        let logits = loaded.model.forward_batch(&suffix_tokens, start, &mut kv);
+                        // Forward pass for suffix tokens only — use active vocab
+                        let logits = loaded.model.forward_batch_active_vocab(
+                            &suffix_tokens,
+                            start,
+                            &mut kv,
+                            &mut loaded.scratch,
+                            &mut loaded.active_vocab,
+                        );
+                        // Copy logits out since we need to pass loaded mutably
+                        let logits_owned = logits.to_vec();
 
                         drop(prefix_guard);
                         return self.generate_sql_from_logits(
                             loaded,
-                            logits,
+                            logits_owned,
                             &mut kv,
                             start + suffix_tokens.len(),
                             ctx_size,
@@ -355,8 +376,12 @@ impl LlmEngine {
                 let prefix_tokens = loaded.tokenizer.encode(&prefix_prompt);
                 let prefix_len = prefix_tokens.len();
 
-                // Process prefix tokens first
-                let _ = loaded.model.forward_batch(&prefix_tokens, 0, &mut kv);
+                // Process prefix tokens first (hidden state only, no LM head needed)
+                for (i, &token) in prefix_tokens.iter().enumerate() {
+                    loaded
+                        .model
+                        .forward_hidden(token, i, &mut kv, &mut loaded.scratch);
+                }
 
                 // Cache the prefix KV state for future reuse (clone before continuing)
                 let kv_for_cache = kv.clone_state();
@@ -368,20 +393,23 @@ impl LlmEngine {
                 });
                 drop(prefix_guard);
 
-                // Continue processing the remaining suffix tokens
+                // Continue processing the remaining suffix tokens with active vocab
                 let suffix_tokens = &full_tokens[prefix_len..];
-                let logits = if suffix_tokens.is_empty() {
-                    // Edge case: prompt is exactly the prefix
-                    loaded.model.forward_batch(&prefix_tokens, 0, &mut kv)
-                } else {
-                    loaded
-                        .model
-                        .forward_batch(suffix_tokens, prefix_len, &mut kv)
-                };
+                if !suffix_tokens.is_empty() {
+                    let logits = loaded.model.forward_batch_active_vocab(
+                        suffix_tokens,
+                        prefix_len,
+                        &mut kv,
+                        &mut loaded.scratch,
+                        &mut loaded.active_vocab,
+                    );
+                    // Copy into scratch.logits for generate_sql_from_logits
+                    loaded.scratch.logits.copy_from_slice(logits);
+                }
 
-                (kv, full_tokens.len(), logits)
+                (kv, full_tokens.len())
             } else {
-                // No prefix caching — process full prompt
+                // No prefix caching — process full prompt with active vocab
                 let full_tokens = loaded.tokenizer.encode(&prompt);
                 let mut kv = KvCache::new(
                     loaded.config.n_layers,
@@ -389,12 +417,22 @@ impl LlmEngine {
                     loaded.config.head_dim,
                     ctx_size,
                 );
-                let logits = loaded.model.forward_batch(&full_tokens, 0, &mut kv);
-                (kv, full_tokens.len(), logits)
+                let logits = loaded.model.forward_batch_active_vocab(
+                    &full_tokens,
+                    0,
+                    &mut kv,
+                    &mut loaded.scratch,
+                    &mut loaded.active_vocab,
+                );
+                // Copy into scratch.logits
+                loaded.scratch.logits.copy_from_slice(logits);
+                (kv, full_tokens.len())
             };
 
+        // Generate from the logits already in scratch.logits
+        let logits_vec = loaded.scratch.logits.clone();
         let raw =
-            self.generate_sql_from_logits(loaded, logits, &mut kv_cache, start_pos, ctx_size)?;
+            self.generate_sql_from_logits(loaded, logits_vec, &mut kv_cache, start_pos, ctx_size)?;
 
         let sql = clean_sql_output(&raw);
 
@@ -405,10 +443,10 @@ impl LlmEngine {
         Ok(sql)
     }
 
-    /// Generate SQL tokens from logits, using grammar constraints and sampling.
+    /// Generate SQL tokens from logits, using active-vocab pruning and sampling.
     fn generate_sql_from_logits(
         &self,
-        loaded: &LoadedModel,
+        loaded: &mut LoadedModel,
         mut logits: Vec<f32>,
         kv_cache: &mut KvCache,
         start_pos: usize,
@@ -419,9 +457,6 @@ impl LlmEngine {
         let mut pos = start_pos;
 
         for _ in 0..self.max_tokens {
-            // Apply grammar constraints
-            loaded.grammar.apply(&mut logits);
-
             let token = sampler.sample(&mut logits, &output_tokens);
 
             if loaded.tokenizer.is_eos(token) {
@@ -443,7 +478,16 @@ impl LlmEngine {
                 break;
             }
 
-            logits = loaded.model.forward(token, pos, kv_cache);
+            // Forward pass with active vocab — non-active tokens are NEG_INFINITY,
+            // so grammar.apply() is unnecessary.
+            let active_logits = loaded.model.forward_active_vocab(
+                token,
+                pos,
+                kv_cache,
+                &mut loaded.scratch,
+                &mut loaded.active_vocab,
+            );
+            logits.copy_from_slice(active_logits);
             pos += 1;
         }
 

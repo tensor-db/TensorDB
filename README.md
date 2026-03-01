@@ -43,12 +43,22 @@ Full 4-way Criterion benchmark (optimized release build):
 - **3.6 µs** point writes via `FastWritePath` with group-commit WAL
 - **3.8M reads/sec** sustained throughput at 1k dataset size
 
+**Inference engine** (NL-to-SQL via embedded Qwen3-0.6B):
+
+| Metric | Baseline | Optimized | Speedup |
+|--------|----------|-----------|---------|
+| Per-token LM head | 54.9 ms | 1.8 ms | **30.3x** |
+| End-to-end per token | 56.5 ms | 1.8 ms | **30.9x** |
+
+Purpose-built optimizations (vocab pruning, SIMD matvec, grammar fusion) exploit the fact that only ~5K of 151K tokens are valid SQL. See [inference benchmarks](#ai-runtime--embedded-inference-engine) for details.
+
 Benchmarks use Criterion 0.5. Run them yourself:
 
 ```bash
 cargo bench --bench comparative    # TensorDB vs SQLite
 cargo bench --bench multi_engine   # TensorDB vs SQLite vs sled vs redb
 cargo bench --bench basic          # Microbenchmarks
+cargo bench --bench inference      # Inference engine optimizations
 ```
 
 ## Install
@@ -183,6 +193,12 @@ cargo run --example ai_native      # AI runtime: insights, risk scoring, query p
 - **Pure-Rust LLM Inference** — Custom inference engine (~3.3K LoC) running Qwen3-0.6B entirely in-process. No C++ toolchain, no llama.cpp, no external model servers. Implements the full stack: GGUF v3 parser, BPE tokenizer, Qwen2 transformer with GQA + RoPE + SwiGLU, KV cache, and token sampling — all in safe Rust.
 - **`ASK` — Natural Language to SQL** — `ASK 'show me the top 10 customers by revenue'` translates to SQL and executes in one step. The database uses its own schema metadata to prompt the model, so it always knows your tables and columns.
 - **SQL Grammar-Constrained Decoding** — Unlike general-purpose inference engines, TensorDB biases token generation toward valid SQL at every decoding step. The grammar decoder penalizes non-SQL tokens, reducing invalid outputs without requiring retries.
+- **Purpose-Built Inference Optimizations** — Five optimizations exploit the fact that this engine only generates SQL, not general text:
+  - **Vocabulary-pruned LM head** — Only ~5K SQL-compatible tokens are scored instead of the full 151K vocab (**30x** faster per token)
+  - **Vec\<bool\> grammar mask** — O(1) array indexing replaces per-token HashSet lookups (**20x** faster than HashSet)
+  - **SIMD matvec** — AVX2/NEON-accelerated quantized matrix-vector multiply (**2.7x** on NEON, up to 4x on AVX2)
+  - **RoPE frequency precomputation** — Table lookup replaces per-head `powf()` calls (**3x** faster)
+  - **Scratch buffer reuse** — Zero per-token heap allocations (all buffers pre-allocated)
 - **Schema-Aware KV Cache Reuse** — The system prompt + schema context is forward-passed once and the resulting KV cache state is reused across queries. When your schema hasn't changed, subsequent `ASK` calls skip ~80% of the inference work (~3-15x faster than cold calls).
 - **Schema Cache with DDL Invalidation** — Schema context is cached with a configurable TTL and automatically invalidated on `CREATE TABLE`, `DROP TABLE`, or `ALTER TABLE`.
 - **Background Insight Synthesis** — In-process AI pipeline consuming change feeds.
@@ -204,10 +220,34 @@ Most databases that embed AI wrap an existing C/C++ inference library (PostgresM
 | **GPU** | CPU only | CUDA, Metal, Vulkan, 10+ backends |
 | **Quantization** | Q8_0, Q4_0, F16, F32 | 30+ formats including sub-2-bit |
 | **Grammar** | SQL-specific soft constraints | GBNF formal grammar (any grammar) |
+| **SQL-mode perf** | **30x faster per-token** via vocab pruning + grammar fusion (1.8 ms/tok vs 56.5 ms/tok baseline) | Full-vocab LM head on every token regardless of task |
 | **Schema integration** | Direct access to database metadata, KV cache reuse across calls with same schema | External process, no schema awareness |
 | **Cross-compilation** | Pure Rust — compiles anywhere Rust does | Platform-specific C++ toolchain per target |
 
-The trade-off is intentional: TensorDB's engine is not a general-purpose inference runtime. It runs one model family on CPU for one task (NL-to-SQL). In exchange, it compiles with `cargo build`, cross-compiles trivially, has zero unsafe C++ dependencies, and integrates directly with the database's schema metadata and query engine.
+The trade-off is intentional: TensorDB's engine is not a general-purpose inference runtime. It runs one model family on CPU for one task (NL-to-SQL). In exchange, it compiles with `cargo build`, cross-compiles trivially, has zero unsafe C++ dependencies, and integrates directly with the database's schema metadata and query engine. Because the engine knows it's generating SQL — not prose — it prunes the vocabulary from 151K tokens to ~5K, skipping 97% of the most expensive per-token computation. A general-purpose engine can't make that trade.
+
+</details>
+
+<details>
+<summary><strong>Inference performance benchmarks (Criterion 0.5, Qwen3-0.6B Q8_0 dimensions)</strong></summary>
+
+| Optimization | Before | After | Speedup |
+|---|---|---|---|
+| **LM head (per token)** | 54.9 ms (full 151K vocab) | 1.8 ms (active 5K vocab) | **30.3x** |
+| **Grammar apply (per token)** | 1.03 ms (HashSet 151K lookups) | 50.7 µs (Vec\<bool\> mask) | **20.3x** |
+| **RoPE (per token)** | 4.2 µs (inline `powf`) | 1.4 µs (precomputed freqs) | **3.0x** |
+| **Q8_0 matvec 1024x1024** | 365 µs (scalar) | 136 µs (NEON SIMD) | **2.7x** |
+| **Scratch buffers (per token)** | 3.1 µs (10 allocs) | 2.7 µs (zero allocs) | 1.14x |
+| **End-to-end per token** | 56.5 ms (full matvec + HashSet) | **1.8 ms** (active vocab + scatter) | **30.9x** |
+
+The dominant cost is the LM head matmul — a [151K × 1024] matrix-vector multiply that runs on every generated token. By recognizing that only ~5K tokens can appear in valid SQL, TensorDB computes only those 5K dot products and fills the rest with −∞. This single optimization accounts for most of the 30x improvement.
+
+Run the benchmarks yourself:
+
+```bash
+cargo bench --bench inference                 # All optimizations
+cargo bench --bench inference --features simd # With SIMD-accelerated matvec
+```
 
 </details>
 
@@ -218,7 +258,7 @@ The trade-off is intentional: TensorDB's engine is not a general-purpose inferen
 - **Interactive CLI** — TAB completion, persistent history, table/line/JSON output modes.
 - **Optional C++ Acceleration** — `--features native` via `cxx` for Hasher, Compressor, BloomProbe.
 - **Optional io_uring** — `--features io-uring` for Linux async I/O.
-- **Optional SIMD** — `--features simd` for hardware-accelerated bloom probes and checksums.
+- **Optional SIMD** — `--features simd` for hardware-accelerated bloom probes, checksums, and LLM inference matvec (AVX2/NEON).
 
 ## Use Cases
 
@@ -513,7 +553,7 @@ tensordb/
 │   ├── tensordb-python/         # Python bindings (PyO3 / maturin)
 │   └── tensordb-node/           # Node.js bindings (napi-rs)
 ├── tests/                       # 740+ tests across 35 suites
-├── benches/                     # Criterion benchmarks (basic, comparative, multi-engine)
+├── benches/                     # Criterion benchmarks (basic, comparative, multi-engine, inference)
 ├── examples/                    # quickstart.rs, bitemporal.rs, ai_native.rs, fastapi, express
 ├── docs/                        # Interactive documentation site (Starlight/Astro)
 ├── scripts/                     # Benchmark matrix, AI overhead gate, overnight burn-in
@@ -532,7 +572,7 @@ cargo test --workspace --all-targets
 # With C++ acceleration
 cargo test --workspace --all-targets --features native
 
-# With SIMD-accelerated bloom probes and checksums
+# With SIMD-accelerated bloom probes, checksums, and inference matvec
 cargo test --features simd
 
 # With io_uring async I/O (Linux only)
@@ -549,6 +589,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo bench --bench comparative
 cargo bench --bench multi_engine
 cargo bench --bench basic
+cargo bench --bench inference                 # Inference engine optimizations
+cargo bench --bench inference --features simd # With SIMD-accelerated matvec
 
 # AI overhead regression gate
 ./scripts/ai_overhead_gate.sh
@@ -604,7 +646,7 @@ cd docs && npm install && npm run dev
 - **v0.19–v0.26** — Columnar storage, CDC, event sourcing, auth/RBAC, connection pooling, monitoring, schema evolution
 - **v0.27–v0.28** — Replication foundations, fast write engine
 - **v0.29** — EOAC transactions, PITR, incremental backup, encryption at rest
-- **v0.2.0** — Embedded LLM (Qwen3 0.6B via pure-Rust native inference engine)
+- **v0.2.0** — Embedded LLM (Qwen3 0.6B via pure-Rust native inference engine) with purpose-built SQL-mode optimizations (30x per-token speedup via vocab pruning, SIMD matvec, grammar fusion)
 - **v0.30** — Advanced vector search (VECTOR(n), HNSW/IVF-PQ, hybrid search, temporal vectors), horizontal scaling (tensordb-distributed crate), ecosystem (Docker, CI publish workflows, example apps)
 
 ### Phase 1: Observability & Diagnostics

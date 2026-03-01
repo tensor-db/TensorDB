@@ -7,8 +7,6 @@
 //! This is intentionally a *soft* constraint — it biases toward SQL tokens without
 //! being so restrictive that it prevents the model from generating valid but unusual SQL.
 
-use std::collections::HashSet;
-
 use super::tokenizer::BpeTokenizer;
 
 /// SQL keywords recognized by the grammar decoder.
@@ -165,10 +163,12 @@ const SQL_CHARS: &[u8] = b" \t\n\r.,;()[]'\"*+-/=<>!_%0123456789";
 
 /// Constrained SQL grammar decoder.
 pub struct SqlGrammarDecoder {
-    /// Token IDs of all SQL keywords and common SQL tokens.
-    sql_token_ids: HashSet<u32>,
-    /// Token IDs that contain only valid SQL characters (identifiers, operators, etc.).
-    valid_sql_char_tokens: HashSet<u32>,
+    /// Per-token validity: `valid_mask[token_id]` is true for SQL-compatible tokens.
+    /// O(1) lookup replaces the previous HashSet.
+    valid_mask: Vec<bool>,
+    /// Sorted list of SQL-compatible token IDs (~5K out of ~151K vocab).
+    /// Used for vocabulary-pruned LM head computation.
+    active_vocab: Vec<u32>,
     /// Whether constrained decoding is enabled.
     enabled: bool,
     /// Penalty applied to non-SQL tokens (subtracted from logit).
@@ -179,20 +179,18 @@ pub struct SqlGrammarDecoder {
 impl SqlGrammarDecoder {
     /// Build the grammar decoder from a tokenizer's vocabulary.
     pub fn new(tokenizer: &BpeTokenizer, enabled: bool) -> Self {
-        let mut sql_token_ids = HashSet::new();
-        let mut valid_sql_char_tokens = HashSet::new();
-
         let vocab_size = tokenizer.vocab_size();
+        let mut valid_mask = vec![false; vocab_size];
 
         // Find token IDs for SQL keywords
         for keyword in SQL_KEYWORDS {
             if let Some(id) = tokenizer.token_id(keyword.as_bytes()) {
-                sql_token_ids.insert(id);
+                valid_mask[id as usize] = true;
             }
             // Also try with leading space (common in BPE)
             let spaced = format!(" {keyword}");
             if let Some(id) = tokenizer.token_id(spaced.as_bytes()) {
-                sql_token_ids.insert(id);
+                valid_mask[id as usize] = true;
             }
         }
 
@@ -200,28 +198,28 @@ impl SqlGrammarDecoder {
         for id in 0..vocab_size as u32 {
             if let Some(token_bytes) = tokenizer.token_str(id) {
                 if is_sql_compatible(token_bytes) {
-                    valid_sql_char_tokens.insert(id);
+                    valid_mask[id as usize] = true;
                 }
             }
         }
 
-        // SQL token IDs are also valid SQL char tokens
-        for &id in &sql_token_ids {
-            valid_sql_char_tokens.insert(id);
-        }
-
         // Always allow EOS tokens
-        valid_sql_char_tokens.insert(tokenizer.eos_token_id);
+        valid_mask[tokenizer.eos_token_id as usize] = true;
         if let Some(id) = tokenizer.special_token_id("<|im_end|>") {
-            valid_sql_char_tokens.insert(id);
+            valid_mask[id as usize] = true;
         }
         if let Some(id) = tokenizer.special_token_id("<|endoftext|>") {
-            valid_sql_char_tokens.insert(id);
+            valid_mask[id as usize] = true;
         }
 
+        // Build sorted active vocab from the mask
+        let active_vocab: Vec<u32> = (0..vocab_size as u32)
+            .filter(|&id| valid_mask[id as usize])
+            .collect();
+
         Self {
-            sql_token_ids,
-            valid_sql_char_tokens,
+            valid_mask,
+            active_vocab,
             enabled,
             penalty: 10.0, // Soft penalty, not hard mask
         }
@@ -238,16 +236,15 @@ impl SqlGrammarDecoder {
         }
 
         for (id, logit) in logits.iter_mut().enumerate() {
-            let id = id as u32;
-            if !self.valid_sql_char_tokens.contains(&id) {
+            if !self.valid_mask[id] {
                 *logit -= self.penalty;
             }
         }
     }
 
-    /// Check if a token is a recognized SQL keyword token.
-    pub fn is_sql_keyword(&self, token_id: u32) -> bool {
-        self.sql_token_ids.contains(&token_id)
+    /// Return the sorted list of SQL-compatible token IDs.
+    pub fn active_token_ids(&self) -> &[u32] {
+        &self.active_vocab
     }
 }
 
@@ -288,17 +285,18 @@ mod tests {
 
     #[test]
     fn grammar_penalty_applied() {
-        // Simulate a simple vocab
+        // Simulate a simple vocab of 10 tokens
         let mut logits = vec![5.0; 10];
 
         // Create a mock decoder that marks tokens 0-4 as valid SQL
-        let mut valid = HashSet::new();
-        for i in 0..5u32 {
-            valid.insert(i);
+        let mut valid_mask = vec![false; 10];
+        for item in valid_mask.iter_mut().take(5) {
+            *item = true;
         }
+        let active_vocab = (0..5u32).collect();
         let decoder = SqlGrammarDecoder {
-            sql_token_ids: HashSet::new(),
-            valid_sql_char_tokens: valid,
+            valid_mask,
+            active_vocab,
             enabled: true,
             penalty: 10.0,
         };
@@ -319,8 +317,8 @@ mod tests {
     fn disabled_grammar_is_noop() {
         let mut logits = vec![5.0; 10];
         let decoder = SqlGrammarDecoder {
-            sql_token_ids: HashSet::new(),
-            valid_sql_char_tokens: HashSet::new(),
+            valid_mask: vec![false; 10],
+            active_vocab: Vec::new(),
             enabled: false,
             penalty: 10.0,
         };
@@ -330,5 +328,23 @@ mod tests {
         for &l in &logits {
             assert_eq!(l, 5.0);
         }
+    }
+
+    #[test]
+    fn active_vocab_matches_mask() {
+        let mut valid_mask = vec![false; 20];
+        valid_mask[3] = true;
+        valid_mask[7] = true;
+        valid_mask[15] = true;
+        let active_vocab: Vec<u32> = (0..20u32).filter(|&id| valid_mask[id as usize]).collect();
+
+        let decoder = SqlGrammarDecoder {
+            valid_mask,
+            active_vocab,
+            enabled: true,
+            penalty: 10.0,
+        };
+
+        assert_eq!(decoder.active_token_ids(), &[3, 7, 15]);
     }
 }

@@ -47,6 +47,7 @@ sled = "0.34"
 redb = "2"
 fastrand = "2"
 half = "2"
+tensordb-core = { path = "crates/tensordb-core" }
 
 [[bench]]
 name = "basic"
@@ -58,4 +59,8 @@ harness = false
 
 [[bench]]
 name = "multi_engine"
+harness = false
+
+[[bench]]
+name = "inference"
 harness = false
