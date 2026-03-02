@@ -90,6 +90,49 @@ pub fn rms_norm(x: &[f32], weight: &[f32], eps: f32, output: &mut [f32]) {
     }
 }
 
+/// Fused RMSNorm + Q8_0 matvec: eliminates the intermediate normalized buffer.
+/// Computes: output[r] = dot(weights[r], x * inv_rms * norm_weight)
+/// without materializing the normalized input to memory.
+pub fn fused_rmsnorm_q8_0_matvec(
+    x: &[f32],
+    norm_weight: &[f32],
+    eps: f32,
+    weight_data: &[u8],
+    output: &mut [f32],
+    rows: usize,
+    cols: usize,
+) {
+    const BLOCK_SIZE: usize = 32;
+    const BLOCK_BYTES: usize = 34;
+    let blocks_per_row = cols / BLOCK_SIZE;
+
+    // Compute inv_rms once
+    let n = x.len();
+    let ss: f32 = x.iter().map(|&v| v * v).sum::<f32>() / n as f32;
+    let inv_rms = 1.0 / (ss + eps).sqrt();
+
+    for (r, out) in output.iter_mut().enumerate().take(rows) {
+        let mut sum = 0.0f32;
+        let row_offset = r * blocks_per_row * BLOCK_BYTES;
+        for b in 0..blocks_per_row {
+            let block = &weight_data[row_offset + b * BLOCK_BYTES..];
+            let scale =
+                half::f16::from_bits(u16::from_le_bytes([block[0], block[1]])).to_f32();
+            let input_offset = b * BLOCK_SIZE;
+            let mut block_sum = 0.0f32;
+            for j in 0..BLOCK_SIZE {
+                // Quants stored as signed int8 in two's complement; u8->i8 reinterprets bits.
+                let val = block[2 + j] as i8;
+                // Fused: apply RMSNorm on-the-fly during dot product
+                let normed_input = x[input_offset + j] * inv_rms * norm_weight[input_offset + j];
+                block_sum += val as f32 * normed_input;
+            }
+            sum += scale * block_sum;
+        }
+        *out = sum;
+    }
+}
+
 /// SiLU (Sigmoid Linear Unit) activation, applied in-place.
 ///
 /// `x[i] = x[i] / (1.0 + exp(-x[i]))` which is equivalent to `x * sigmoid(x)`.
@@ -191,5 +234,45 @@ mod tests {
         assert!((x[1] - 0.7311).abs() < 0.01);
         // silu(-1.0) = -1.0 / (1 + exp(1)) ~ -0.2689
         assert!((x[2] - (-0.2689)).abs() < 0.01);
+    }
+
+    #[test]
+    fn fused_rmsnorm_q8_0_matches_separate() {
+        let rows = 2;
+        let cols = 32;
+        let x: Vec<f32> = (0..32).map(|i| (i as f32 + 1.0) * 0.1).collect();
+        let norm_weight = vec![1.0f32; 32];
+        let eps = 1e-6;
+
+        // Build Q8_0 weight data
+        let scale = half::f16::from_f32(0.01);
+        let scale_bytes = scale.to_bits().to_le_bytes();
+        let mut data = Vec::new();
+        for _ in 0..rows {
+            data.push(scale_bytes[0]);
+            data.push(scale_bytes[1]);
+            for j in 0..32u8 {
+                data.push(j);
+            }
+        }
+
+        // Fused path
+        let mut fused_out = vec![0.0f32; rows];
+        fused_rmsnorm_q8_0_matvec(&x, &norm_weight, eps, &data, &mut fused_out, rows, cols);
+
+        // Separate path
+        let mut normed = vec![0.0f32; cols];
+        rms_norm(&x, &norm_weight, eps, &mut normed);
+        let mut separate_out = vec![0.0f32; rows];
+        q8_0_matvec(&data, &normed, &mut separate_out, rows, cols);
+
+        for i in 0..rows {
+            assert!(
+                (fused_out[i] - separate_out[i]).abs() < 1e-4,
+                "row {i}: fused={}, separate={}",
+                fused_out[i],
+                separate_out[i]
+            );
+        }
     }
 }

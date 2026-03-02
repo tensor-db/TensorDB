@@ -13,6 +13,8 @@ pub mod sampler;
 #[cfg(feature = "llm")]
 pub mod schema_cache;
 #[cfg(feature = "llm")]
+pub mod speculation;
+#[cfg(feature = "llm")]
 pub mod sql_grammar;
 #[cfg(feature = "llm")]
 pub mod tokenizer;
