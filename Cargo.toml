@@ -30,7 +30,6 @@ resolver = "2"
 [features]
 default = ["llm"]
 native = ["tensordb-core/native"]
-simd = ["tensordb-core/simd"]
 io-uring = ["tensordb-core/io-uring"]
 parquet = ["tensordb-core/parquet"]
 llm = ["tensordb-core/llm"]

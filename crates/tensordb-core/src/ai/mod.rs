@@ -18,6 +18,8 @@ pub mod sql_grammar;
 pub mod tokenizer;
 #[cfg(feature = "llm")]
 pub mod transformer;
+#[cfg(feature = "llm")]
+pub mod kernels;
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};

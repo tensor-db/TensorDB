@@ -11,10 +11,9 @@ categories = ["database-implementations"]
 [features]
 default = ["llm"]
 native = ["dep:tensordb-native"]
-simd = []
 io-uring = ["dep:io-uring"]
 parquet = ["dep:parquet", "dep:arrow"]
-llm = ["dep:dirs", "dep:ureq"]
+llm = ["dep:dirs", "dep:ureq", "dep:rayon"]
 encryption = ["dep:aes-gcm"]
 
 [dependencies]
@@ -38,6 +37,13 @@ parquet = { version = "54", optional = true, default-features = false, features 
 arrow = { version = "54", optional = true, default-features = false, features = ["json"] }
 dirs = { version = "5", optional = true }
 ureq = { version = "2", optional = true }
+rayon = { version = "1", optional = true }
+
+[lints.rust]
+# Legacy SIMD cfg guards in transformer.rs are being migrated to the new
+# kernels/ dispatch engine (Tasks 2-4). Until migration is complete, tell
+# check-cfg that `feature = "simd"` is an expected value.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("simd"))'] }
 
 [dev-dependencies]
 tempfile = "3"
