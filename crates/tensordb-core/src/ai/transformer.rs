@@ -857,18 +857,38 @@ impl TransformerModel {
             .copy_from_slice(&self.embedding[emb_offset..emb_offset + dim]);
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
-            // Pre-attention RMSNorm
-            rms_norm(
-                &scratch.x,
-                &layer.attn_norm.weight,
-                cfg.rms_norm_eps,
-                &mut scratch.xb,
-            );
-
-            // QKV projections
-            layer.q_proj.matvec(&scratch.xb, &mut scratch.q);
-            layer.k_proj.matvec(&scratch.xb, &mut scratch.k);
-            layer.v_proj.matvec(&scratch.xb, &mut scratch.v);
+            // Pre-attention RMSNorm + QKV projections
+            // Fused RMSNorm + Q projection when Q is Q8_0 (saves one hidden_dim read+write)
+            if layer.q_proj.dtype == super::gguf::GgufDtype::Q8_0 {
+                super::kernels::fused_rmsnorm_q8_0_matvec(
+                    &scratch.x,
+                    &layer.attn_norm.weight,
+                    cfg.rms_norm_eps,
+                    &layer.q_proj.data,
+                    &mut scratch.q,
+                    layer.q_proj.rows,
+                    layer.q_proj.cols,
+                );
+                // K and V still need normalized input
+                rms_norm(
+                    &scratch.x,
+                    &layer.attn_norm.weight,
+                    cfg.rms_norm_eps,
+                    &mut scratch.xb,
+                );
+                layer.k_proj.matvec(&scratch.xb, &mut scratch.k);
+                layer.v_proj.matvec(&scratch.xb, &mut scratch.v);
+            } else {
+                rms_norm(
+                    &scratch.x,
+                    &layer.attn_norm.weight,
+                    cfg.rms_norm_eps,
+                    &mut scratch.xb,
+                );
+                layer.q_proj.matvec(&scratch.xb, &mut scratch.q);
+                layer.k_proj.matvec(&scratch.xb, &mut scratch.k);
+                layer.v_proj.matvec(&scratch.xb, &mut scratch.v);
+            }
 
             // Add biases if present (Qwen2 uses biases)
             if let Some(ref bias) = layer.q_bias {
@@ -938,17 +958,36 @@ impl TransformerModel {
                 scratch.x[i] += scratch.attn_projected[i];
             }
 
-            // Pre-FFN RMSNorm
-            rms_norm(
-                &scratch.x,
-                &layer.ffn_norm.weight,
-                cfg.rms_norm_eps,
-                &mut scratch.xb,
-            );
-
-            // SwiGLU FFN
-            layer.gate_proj.matvec(&scratch.xb, &mut scratch.ffn_gate);
-            layer.up_proj.matvec(&scratch.xb, &mut scratch.ffn_up);
+            // Pre-FFN RMSNorm + SwiGLU FFN
+            // Fused RMSNorm + gate projection when gate_proj is Q8_0
+            if layer.gate_proj.dtype == super::gguf::GgufDtype::Q8_0 {
+                super::kernels::fused_rmsnorm_q8_0_matvec(
+                    &scratch.x,
+                    &layer.ffn_norm.weight,
+                    cfg.rms_norm_eps,
+                    &layer.gate_proj.data,
+                    &mut scratch.ffn_gate,
+                    layer.gate_proj.rows,
+                    layer.gate_proj.cols,
+                );
+                // up_proj still needs normalized input
+                rms_norm(
+                    &scratch.x,
+                    &layer.ffn_norm.weight,
+                    cfg.rms_norm_eps,
+                    &mut scratch.xb,
+                );
+                layer.up_proj.matvec(&scratch.xb, &mut scratch.ffn_up);
+            } else {
+                rms_norm(
+                    &scratch.x,
+                    &layer.ffn_norm.weight,
+                    cfg.rms_norm_eps,
+                    &mut scratch.xb,
+                );
+                layer.gate_proj.matvec(&scratch.xb, &mut scratch.ffn_gate);
+                layer.up_proj.matvec(&scratch.xb, &mut scratch.ffn_up);
+            }
 
             super::kernels::silu_inplace(&mut scratch.ffn_gate[..cfg.intermediate_dim]);
             for i in 0..cfg.intermediate_dim {

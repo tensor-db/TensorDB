@@ -235,6 +235,53 @@ pub fn q4_0_matvec(data: &[u8], input: &[f32], output: &mut [f32], rows: usize, 
     q4_0_matvec_dispatch(data, input, output, rows, cols);
 }
 
+/// Fused RMSNorm + Q8_0 matvec dispatch.
+/// Eliminates one full hidden_dim read+write per call by computing
+/// the normalized input on-the-fly during the dot product.
+pub fn fused_rmsnorm_q8_0_matvec(
+    x: &[f32],
+    norm_weight: &[f32],
+    eps: f32,
+    weight_data: &[u8],
+    output: &mut [f32],
+    rows: usize,
+    cols: usize,
+) {
+    #[cfg(feature = "llm")]
+    if rows >= MIN_PARALLEL_ROWS {
+        const BLOCK_SIZE: usize = 32;
+        const BLOCK_BYTES: usize = 34;
+        let blocks_per_row = cols / BLOCK_SIZE;
+        let row_stride = blocks_per_row * BLOCK_BYTES;
+
+        // Precompute inv_rms once (shared across all rows)
+        let n = x.len();
+        let ss: f32 = x.iter().map(|&v| v * v).sum::<f32>() / n as f32;
+        let inv_rms = 1.0 / (ss + eps).sqrt();
+
+        output.par_iter_mut().enumerate().for_each(|(r, out)| {
+            let row_data = &weight_data[r * row_stride..r * row_stride + row_stride];
+            let mut sum = 0.0f32;
+            for b in 0..blocks_per_row {
+                let block = &row_data[b * BLOCK_BYTES..];
+                let scale =
+                    half::f16::from_bits(u16::from_le_bytes([block[0], block[1]])).to_f32();
+                let input_offset = b * BLOCK_SIZE;
+                let mut block_sum = 0.0f32;
+                for j in 0..BLOCK_SIZE {
+                    let val = block[2 + j] as i8;
+                    let normed = x[input_offset + j] * inv_rms * norm_weight[input_offset + j];
+                    block_sum += val as f32 * normed;
+                }
+                sum += scale * block_sum;
+            }
+            *out = sum;
+        });
+        return;
+    }
+    scalar::fused_rmsnorm_q8_0_matvec(x, norm_weight, eps, weight_data, output, rows, cols);
+}
+
 /// RMSNorm: `output[i] = weight[i] * (x[i] * inv_rms)`.
 pub fn rms_norm(x: &[f32], weight: &[f32], eps: f32, output: &mut [f32]) {
     rms_norm_dispatch(x, weight, eps, output);
