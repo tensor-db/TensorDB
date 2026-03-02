@@ -11,6 +11,13 @@ pub fn q8_0_matvec(data: &[u8], input: &[f32], output: &mut [f32], rows: usize, 
     const BLOCK_SIZE: usize = 32;
     const BLOCK_BYTES: usize = 34;
     let blocks_per_row = cols / BLOCK_SIZE;
+    debug_assert_eq!(cols % BLOCK_SIZE, 0, "cols must be a multiple of BLOCK_SIZE");
+    debug_assert!(output.len() >= rows, "output too small for {rows} rows");
+    debug_assert!(input.len() >= cols, "input too small for {cols} cols");
+    debug_assert!(
+        data.len() >= rows * blocks_per_row * BLOCK_BYTES,
+        "data too small for {rows}x{cols} Q8_0 matrix"
+    );
 
     for (r, out) in output.iter_mut().enumerate().take(rows) {
         let mut sum = 0.0f32;
@@ -22,6 +29,7 @@ pub fn q8_0_matvec(data: &[u8], input: &[f32], output: &mut [f32], rows: usize, 
             let input_offset = b * BLOCK_SIZE;
             let mut block_sum = 0.0f32;
             for j in 0..BLOCK_SIZE {
+                // Quants stored as signed int8 in two's complement; u8->i8 reinterprets bits.
                 let val = block[2 + j] as i8;
                 block_sum += val as f32 * input[input_offset + j];
             }
@@ -40,6 +48,13 @@ pub fn q4_0_matvec(data: &[u8], input: &[f32], output: &mut [f32], rows: usize, 
     const BLOCK_SIZE: usize = 32;
     const BLOCK_BYTES: usize = 18;
     let blocks_per_row = cols / BLOCK_SIZE;
+    debug_assert_eq!(cols % BLOCK_SIZE, 0, "cols must be a multiple of BLOCK_SIZE");
+    debug_assert!(output.len() >= rows, "output too small for {rows} rows");
+    debug_assert!(input.len() >= cols, "input too small for {cols} cols");
+    debug_assert!(
+        data.len() >= rows * blocks_per_row * BLOCK_BYTES,
+        "data too small for {rows}x{cols} Q4_0 matrix"
+    );
 
     for (r, out) in output.iter_mut().enumerate().take(rows) {
         let mut sum = 0.0f32;

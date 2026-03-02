@@ -187,14 +187,9 @@ pub fn q8_0_matvec(data: &[u8], input: &[f32], output: &mut [f32], rows: usize, 
             .enumerate()
             .for_each(|(r, out)| {
                 let row_data_start = r * row_stride;
+                let row_data = &data[row_data_start..row_data_start + row_stride];
                 let mut single = [0.0f32];
-                q8_0_matvec_dispatch(
-                    &data[row_data_start..],
-                    input,
-                    &mut single,
-                    1,
-                    cols,
-                );
+                q8_0_matvec_dispatch(row_data, input, &mut single, 1, cols);
                 *out = single[0];
             });
         return;
@@ -218,14 +213,9 @@ pub fn q4_0_matvec(data: &[u8], input: &[f32], output: &mut [f32], rows: usize, 
             .enumerate()
             .for_each(|(r, out)| {
                 let row_data_start = r * row_stride;
+                let row_data = &data[row_data_start..row_data_start + row_stride];
                 let mut single = [0.0f32];
-                q4_0_matvec_dispatch(
-                    &data[row_data_start..],
-                    input,
-                    &mut single,
-                    1,
-                    cols,
-                );
+                q4_0_matvec_dispatch(row_data, input, &mut single, 1, cols);
                 *out = single[0];
             });
         return;
