@@ -5,7 +5,14 @@
 
 use crate::error::{Result, TensorError};
 
+#[cfg(feature = "llm")]
+use rayon::prelude::*;
+
 use super::gguf::{dequant_tensor, GgufDtype, GgufFile};
+
+/// Minimum number of output rows before switching to parallel execution.
+/// Below this threshold the rayon scheduling overhead exceeds the benefit.
+const MIN_PARALLEL_ROWS: usize = 128;
 
 /// Model hyperparameters extracted from GGUF metadata.
 #[derive(Debug, Clone)]
@@ -20,7 +27,9 @@ pub struct ModelConfig {
     pub rms_norm_eps: f32,
     pub head_dim: usize,
     pub context_length: usize,
-    /// Precomputed RoPE frequencies: `1.0 / theta^(2i/head_dim)` for `i in 0..head_dim/2`.
+    /// Linear RoPE scaling factor (1.0 = no scaling, >1.0 = extends context).
+    pub rope_scale: f32,
+    /// Precomputed RoPE frequencies: `1.0 / (theta^(2i/head_dim) * rope_scale)` for `i in 0..head_dim/2`.
     pub rope_freqs: Vec<f32>,
 }
 
@@ -67,8 +76,13 @@ impl ModelConfig {
 
         let head_dim = hidden_dim / n_heads;
 
+        let rope_scale = gguf
+            .get_metadata("llama.rope.scale_linear")
+            .and_then(|v| v.as_f32())
+            .unwrap_or(1.0);
+
         let rope_freqs: Vec<f32> = (0..head_dim / 2)
-            .map(|i| 1.0 / rope_theta.powf((2 * i) as f32 / head_dim as f32))
+            .map(|i| 1.0 / (rope_theta.powf((2 * i) as f32 / head_dim as f32) * rope_scale))
             .collect();
 
         Ok(Self {
@@ -82,6 +96,7 @@ impl ModelConfig {
             rms_norm_eps,
             head_dim,
             context_length,
+            rope_scale,
             rope_freqs,
         })
     }
@@ -168,15 +183,29 @@ impl WeightMatrix {
         match self.dtype {
             GgufDtype::Q8_0 => self.matvec_q8_0(input, output),
             GgufDtype::Q4_0 => self.matvec_q4_0(input, output),
+            GgufDtype::Q6K => self.matvec_q6_k(input, output),
             GgufDtype::F16 => self.matvec_f16(input, output),
             GgufDtype::F32 => self.matvec_f32(input, output),
             _ => {
                 // Fallback: dequantize entire matrix (expensive but correct)
                 if let Ok(weights) = dequant_tensor(&self.data, self.dtype, self.rows * self.cols) {
+                    let cols = self.cols;
+                    #[cfg(feature = "llm")]
+                    if self.rows >= MIN_PARALLEL_ROWS {
+                        output.par_iter_mut().enumerate().for_each(|(r, out)| {
+                            let mut sum = 0.0f32;
+                            let row_start = r * cols;
+                            for c in 0..cols {
+                                sum += weights[row_start + c] * input[c];
+                            }
+                            *out = sum;
+                        });
+                        return;
+                    }
                     for r in 0..self.rows {
                         let mut sum = 0.0f32;
-                        let row_start = r * self.cols;
-                        for c in 0..self.cols {
+                        let row_start = r * cols;
+                        for c in 0..cols {
                             sum += weights[row_start + c] * input[c];
                         }
                         output[r] = sum;
@@ -195,14 +224,32 @@ impl WeightMatrix {
         match self.dtype {
             GgufDtype::Q8_0 => self.matvec_rows_q8_0(input, output, row_indices),
             GgufDtype::Q4_0 => self.matvec_rows_q4_0(input, output, row_indices),
+            GgufDtype::Q6K => self.matvec_rows_q6_k(input, output, row_indices),
             _ => {
                 // Fallback: use full dequant for the selected rows
                 if let Ok(weights) = dequant_tensor(&self.data, self.dtype, self.rows * self.cols) {
+                    let cols = self.cols;
+                    #[cfg(feature = "llm")]
+                    if output.len() >= MIN_PARALLEL_ROWS {
+                        output
+                            .par_iter_mut()
+                            .zip(row_indices.par_iter())
+                            .for_each(|(out, &r)| {
+                                let r = r as usize;
+                                let mut sum = 0.0f32;
+                                let row_start = r * cols;
+                                for c in 0..cols {
+                                    sum += weights[row_start + c] * input[c];
+                                }
+                                *out = sum;
+                            });
+                        return;
+                    }
                     for (out_idx, &r) in row_indices.iter().enumerate() {
                         let r = r as usize;
                         let mut sum = 0.0f32;
-                        let row_start = r * self.cols;
-                        for c in 0..self.cols {
+                        let row_start = r * cols;
+                        for c in 0..cols {
                             sum += weights[row_start + c] * input[c];
                         }
                         output[out_idx] = sum;
@@ -217,14 +264,14 @@ impl WeightMatrix {
         const BLOCK_SIZE: usize = 32;
         const BLOCK_BYTES: usize = 34;
         let blocks_per_row = self.cols / BLOCK_SIZE;
+        let data = &self.data;
 
-        for (out_idx, &r) in row_indices.iter().enumerate() {
+        let compute_row = |r: u32, out: &mut f32| {
             let r = r as usize;
             let mut sum = 0.0f32;
             let row_offset = r * blocks_per_row * BLOCK_BYTES;
-
             for b in 0..blocks_per_row {
-                let block = &self.data[row_offset + b * BLOCK_BYTES..];
+                let block = &data[row_offset + b * BLOCK_BYTES..];
                 let scale = half::f16::from_bits(u16::from_le_bytes([block[0], block[1]])).to_f32();
                 let input_offset = b * BLOCK_SIZE;
                 let mut block_sum = 0.0f32;
@@ -234,7 +281,19 @@ impl WeightMatrix {
                 }
                 sum += scale * block_sum;
             }
-            output[out_idx] = sum;
+            *out = sum;
+        };
+
+        #[cfg(feature = "llm")]
+        if output.len() >= MIN_PARALLEL_ROWS {
+            output
+                .par_iter_mut()
+                .zip(row_indices.par_iter())
+                .for_each(|(out, &r)| compute_row(r, out));
+            return;
+        }
+        for (out_idx, &r) in row_indices.iter().enumerate() {
+            compute_row(r, &mut output[out_idx]);
         }
     }
 
@@ -243,14 +302,14 @@ impl WeightMatrix {
         const BLOCK_SIZE: usize = 32;
         const BLOCK_BYTES: usize = 18;
         let blocks_per_row = self.cols / BLOCK_SIZE;
+        let data = &self.data;
 
-        for (out_idx, &r) in row_indices.iter().enumerate() {
+        let compute_row = |r: u32, out: &mut f32| {
             let r = r as usize;
             let mut sum = 0.0f32;
             let row_offset = r * blocks_per_row * BLOCK_BYTES;
-
             for b in 0..blocks_per_row {
-                let block = &self.data[row_offset + b * BLOCK_BYTES..];
+                let block = &data[row_offset + b * BLOCK_BYTES..];
                 let scale = half::f16::from_bits(u16::from_le_bytes([block[0], block[1]])).to_f32();
                 let input_offset = b * BLOCK_SIZE;
                 let mut block_sum = 0.0f32;
@@ -263,135 +322,202 @@ impl WeightMatrix {
                 }
                 sum += scale * block_sum;
             }
-            output[out_idx] = sum;
+            *out = sum;
+        };
+
+        #[cfg(feature = "llm")]
+        if output.len() >= MIN_PARALLEL_ROWS {
+            output
+                .par_iter_mut()
+                .zip(row_indices.par_iter())
+                .for_each(|(out, &r)| compute_row(r, out));
+            return;
+        }
+        for (out_idx, &r) in row_indices.iter().enumerate() {
+            compute_row(r, &mut output[out_idx]);
         }
     }
 
-    /// Q8_0 matvec dispatch — uses SIMD when available, falls back to scalar.
+    /// Q8_0 matvec dispatch — delegates to kernels module for SIMD + parallelism.
     fn matvec_q8_0(&self, input: &[f32], output: &mut [f32]) {
-        #[cfg(all(target_arch = "x86_64", feature = "simd"))]
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            unsafe {
-                matvec_q8_0_avx2(&self.data, input, output, self.rows, self.cols);
-            }
-            return;
-        }
-        #[cfg(all(target_arch = "aarch64", feature = "simd"))]
-        {
-            unsafe {
-                matvec_q8_0_neon(&self.data, input, output, self.rows, self.cols);
-            }
-            return;
-        }
-        #[allow(unreachable_code)]
-        self.matvec_q8_0_scalar(input, output);
+        super::kernels::q8_0_matvec(&self.data, input, output, self.rows, self.cols);
     }
 
-    /// Q4_0 matvec dispatch — uses SIMD when available, falls back to scalar.
+    /// Q4_0 matvec dispatch — delegates to kernels module for SIMD + parallelism.
     fn matvec_q4_0(&self, input: &[f32], output: &mut [f32]) {
-        #[cfg(all(target_arch = "x86_64", feature = "simd"))]
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            unsafe {
-                matvec_q4_0_avx2(&self.data, input, output, self.rows, self.cols);
+        super::kernels::q4_0_matvec(&self.data, input, output, self.rows, self.cols);
+    }
+
+    /// Scalar Q6_K matvec — dequantize and dot-product per super-block.
+    fn matvec_q6_k(&self, input: &[f32], output: &mut [f32]) {
+        const BLOCK_SIZE: usize = 256;
+        const BLOCK_BYTES: usize = 210;
+        let blocks_per_row = self.cols / BLOCK_SIZE;
+        let data = &self.data;
+
+        let compute_row = |r: usize, out: &mut f32| {
+            let mut sum = 0.0f32;
+            let row_offset = r * blocks_per_row * BLOCK_BYTES;
+            for b in 0..blocks_per_row {
+                let block = &data[row_offset + b * BLOCK_BYTES..];
+                let ql = &block[0..128];
+                let qh = &block[128..192];
+                let scales = &block[192..208];
+                let d = half::f16::from_bits(u16::from_le_bytes([block[208], block[209]])).to_f32();
+                let input_offset = b * BLOCK_SIZE;
+                for sub in 0..16 {
+                    let sc = scales[sub] as i8 as f32;
+                    let mut sub_sum = 0.0f32;
+                    for j in 0..16 {
+                        let idx = sub * 16 + j;
+                        let ql_byte = ql[idx / 2];
+                        let lo4 = if idx % 2 == 0 {
+                            (ql_byte & 0x0F) as i32
+                        } else {
+                            ((ql_byte >> 4) & 0x0F) as i32
+                        };
+                        let qh_byte = qh[idx / 4];
+                        let shift = (idx % 4) * 2;
+                        let hi2 = ((qh_byte >> shift) & 0x03) as i32;
+                        let q = ((hi2 << 4) | lo4) - 32;
+                        sub_sum += q as f32 * input[input_offset + idx];
+                    }
+                    sum += d * sc * sub_sum;
+                }
             }
+            *out = sum;
+        };
+
+        #[cfg(feature = "llm")]
+        if self.rows >= MIN_PARALLEL_ROWS {
+            output
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(r, out)| compute_row(r, out));
             return;
         }
-        #[allow(unreachable_code)]
-        self.matvec_q4_0_scalar(input, output);
-    }
-
-    /// Scalar Q8_0 matvec — dequantize and dot-product per block.
-    fn matvec_q8_0_scalar(&self, input: &[f32], output: &mut [f32]) {
-        const BLOCK_SIZE: usize = 32;
-        const BLOCK_BYTES: usize = 34;
-
-        let blocks_per_row = self.cols / BLOCK_SIZE;
-
         for r in 0..self.rows {
-            let mut sum = 0.0f32;
-            let row_offset = r * blocks_per_row * BLOCK_BYTES;
-
-            for b in 0..blocks_per_row {
-                let block = &self.data[row_offset + b * BLOCK_BYTES..];
-                let scale = half::f16::from_bits(u16::from_le_bytes([block[0], block[1]])).to_f32();
-
-                let input_offset = b * BLOCK_SIZE;
-                let mut block_sum = 0.0f32;
-                for j in 0..BLOCK_SIZE {
-                    let val = block[2 + j] as i8;
-                    block_sum += val as f32 * input[input_offset + j];
-                }
-                sum += scale * block_sum;
-            }
-
-            output[r] = sum;
+            compute_row(r, &mut output[r]);
         }
     }
 
-    /// Scalar Q4_0 matvec.
-    fn matvec_q4_0_scalar(&self, input: &[f32], output: &mut [f32]) {
-        const BLOCK_SIZE: usize = 32;
-        const BLOCK_BYTES: usize = 18;
-
+    /// Q6_K matvec for selected rows (scalar).
+    fn matvec_rows_q6_k(&self, input: &[f32], output: &mut [f32], row_indices: &[u32]) {
+        const BLOCK_SIZE: usize = 256;
+        const BLOCK_BYTES: usize = 210;
         let blocks_per_row = self.cols / BLOCK_SIZE;
+        let data = &self.data;
 
-        for r in 0..self.rows {
+        let compute_row = |r: u32, out: &mut f32| {
+            let r = r as usize;
             let mut sum = 0.0f32;
             let row_offset = r * blocks_per_row * BLOCK_BYTES;
-
             for b in 0..blocks_per_row {
-                let block = &self.data[row_offset + b * BLOCK_BYTES..];
-                let scale = half::f16::from_bits(u16::from_le_bytes([block[0], block[1]])).to_f32();
-
+                let block = &data[row_offset + b * BLOCK_BYTES..];
+                let ql = &block[0..128];
+                let qh = &block[128..192];
+                let scales = &block[192..208];
+                let d = half::f16::from_bits(u16::from_le_bytes([block[208], block[209]])).to_f32();
                 let input_offset = b * BLOCK_SIZE;
-                let mut block_sum = 0.0f32;
-                for j in 0..16 {
-                    let byte = block[2 + j];
-                    let lo = (byte & 0x0F) as i32 - 8;
-                    let hi = ((byte >> 4) & 0x0F) as i32 - 8;
-                    block_sum += lo as f32 * input[input_offset + j * 2];
-                    block_sum += hi as f32 * input[input_offset + j * 2 + 1];
+                for sub in 0..16 {
+                    let sc = scales[sub] as i8 as f32;
+                    let mut sub_sum = 0.0f32;
+                    for j in 0..16 {
+                        let idx = sub * 16 + j;
+                        let ql_byte = ql[idx / 2];
+                        let lo4 = if idx % 2 == 0 {
+                            (ql_byte & 0x0F) as i32
+                        } else {
+                            ((ql_byte >> 4) & 0x0F) as i32
+                        };
+                        let qh_byte = qh[idx / 4];
+                        let shift = (idx % 4) * 2;
+                        let hi2 = ((qh_byte >> shift) & 0x03) as i32;
+                        let q = ((hi2 << 4) | lo4) - 32;
+                        sub_sum += q as f32 * input[input_offset + idx];
+                    }
+                    sum += d * sc * sub_sum;
                 }
-                sum += scale * block_sum;
             }
+            *out = sum;
+        };
 
-            output[r] = sum;
+        #[cfg(feature = "llm")]
+        if output.len() >= MIN_PARALLEL_ROWS {
+            output
+                .par_iter_mut()
+                .zip(row_indices.par_iter())
+                .for_each(|(out, &r)| compute_row(r, out));
+            return;
+        }
+        for (out_idx, &r) in row_indices.iter().enumerate() {
+            compute_row(r, &mut output[out_idx]);
         }
     }
 
     /// F16 matvec.
     fn matvec_f16(&self, input: &[f32], output: &mut [f32]) {
-        for r in 0..self.rows {
+        let cols = self.cols;
+        let data = &self.data;
+
+        let compute_row = |r: usize, out: &mut f32| {
             let mut sum = 0.0f32;
-            let row_offset = r * self.cols * 2;
-            for c in 0..self.cols {
+            let row_offset = r * cols * 2;
+            for c in 0..cols {
                 let bits = u16::from_le_bytes([
-                    self.data[row_offset + c * 2],
-                    self.data[row_offset + c * 2 + 1],
+                    data[row_offset + c * 2],
+                    data[row_offset + c * 2 + 1],
                 ]);
                 let w = half::f16::from_bits(bits).to_f32();
                 sum += w * input[c];
             }
-            output[r] = sum;
+            *out = sum;
+        };
+
+        #[cfg(feature = "llm")]
+        if self.rows >= MIN_PARALLEL_ROWS {
+            output
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(r, out)| compute_row(r, out));
+            return;
+        }
+        for r in 0..self.rows {
+            compute_row(r, &mut output[r]);
         }
     }
 
     /// F32 matvec.
     fn matvec_f32(&self, input: &[f32], output: &mut [f32]) {
-        for r in 0..self.rows {
+        let cols = self.cols;
+        let data = &self.data;
+
+        let compute_row = |r: usize, out: &mut f32| {
             let mut sum = 0.0f32;
-            let row_offset = r * self.cols * 4;
-            for c in 0..self.cols {
+            let row_offset = r * cols * 4;
+            for c in 0..cols {
                 let start = row_offset + c * 4;
                 let w = f32::from_le_bytes([
-                    self.data[start],
-                    self.data[start + 1],
-                    self.data[start + 2],
-                    self.data[start + 3],
+                    data[start],
+                    data[start + 1],
+                    data[start + 2],
+                    data[start + 3],
                 ]);
                 sum += w * input[c];
             }
-            output[r] = sum;
+            *out = sum;
+        };
+
+        #[cfg(feature = "llm")]
+        if self.rows >= MIN_PARALLEL_ROWS {
+            output
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(r, out)| compute_row(r, out));
+            return;
+        }
+        for r in 0..self.rows {
+            compute_row(r, &mut output[r]);
         }
     }
 }
@@ -429,194 +555,6 @@ impl ScratchBuffers {
             logits: vec![0.0; config.vocab_size],
             scores: vec![0.0; config.context_length],
         }
-    }
-}
-
-// ── SIMD matvec implementations ──────────────────────────────────────────
-
-/// AVX2+FMA Q8_0 matvec — processes 8 elements at a time per block.
-#[cfg(all(target_arch = "x86_64", feature = "simd"))]
-#[target_feature(enable = "avx2,fma")]
-unsafe fn matvec_q8_0_avx2(
-    data: &[u8],
-    input: &[f32],
-    output: &mut [f32],
-    rows: usize,
-    cols: usize,
-) {
-    use std::arch::x86_64::*;
-
-    const BLOCK_SIZE: usize = 32;
-    const BLOCK_BYTES: usize = 34;
-    let blocks_per_row = cols / BLOCK_SIZE;
-
-    for r in 0..rows {
-        let mut acc = _mm256_setzero_ps();
-        let row_offset = r * blocks_per_row * BLOCK_BYTES;
-
-        for b in 0..blocks_per_row {
-            let block = &data[row_offset + b * BLOCK_BYTES..];
-            let scale = half::f16::from_bits(u16::from_le_bytes([block[0], block[1]])).to_f32();
-            let scale_v = _mm256_set1_ps(scale);
-
-            let input_offset = b * BLOCK_SIZE;
-            let quants = &block[2..];
-
-            // Process 32 elements in 4 groups of 8
-            let mut block_acc = _mm256_setzero_ps();
-            for g in 0..4 {
-                let g_off = g * 8;
-                // Load 8 int8 values -> convert to f32
-                let q_ptr = quants[g_off..].as_ptr() as *const i64;
-                let q_i64 = _mm_set_epi64x(0, std::ptr::read_unaligned(q_ptr));
-                let q_i16 = _mm256_cvtepi8_epi16(_mm_unpacklo_epi64(q_i64, _mm_setzero_si128()));
-                // Split into two 128-bit halves and convert to f32
-                let q_lo_i32 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(q_i16));
-                let q_lo_f32 = _mm256_cvtepi32_ps(q_lo_i32);
-
-                // Load 8 input f32 values
-                let inp = _mm256_loadu_ps(input[input_offset + g_off..].as_ptr());
-
-                // FMA: block_acc += q * inp
-                block_acc = _mm256_fmadd_ps(q_lo_f32, inp, block_acc);
-            }
-
-            // Multiply accumulated sum by scale
-            acc = _mm256_fmadd_ps(scale_v, block_acc, acc);
-        }
-
-        // Horizontal sum of 8-wide accumulator
-        let hi = _mm256_extractf128_ps(acc, 1);
-        let lo = _mm256_castps256_ps128(acc);
-        let sum128 = _mm_add_ps(lo, hi);
-        let shuf = _mm_movehdup_ps(sum128);
-        let sum64 = _mm_add_ps(sum128, shuf);
-        let shuf2 = _mm_movehl_ps(sum64, sum64);
-        let sum32 = _mm_add_ss(sum64, shuf2);
-        output[r] = _mm_cvtss_f32(sum32);
-    }
-}
-
-/// AVX2+FMA Q4_0 matvec.
-/// Q4_0 has interleaved lo/hi nibble layout, so we pre-compute pair sums
-/// and use AVX2 for the accumulation and scaling.
-#[cfg(all(target_arch = "x86_64", feature = "simd"))]
-#[target_feature(enable = "avx2,fma")]
-unsafe fn matvec_q4_0_avx2(
-    data: &[u8],
-    input: &[f32],
-    output: &mut [f32],
-    rows: usize,
-    cols: usize,
-) {
-    use std::arch::x86_64::*;
-
-    const BLOCK_SIZE: usize = 32;
-    const BLOCK_BYTES: usize = 18;
-    let blocks_per_row = cols / BLOCK_SIZE;
-
-    for r in 0..rows {
-        let mut acc = _mm256_setzero_ps();
-        let row_offset = r * blocks_per_row * BLOCK_BYTES;
-
-        for b in 0..blocks_per_row {
-            let block = &data[row_offset + b * BLOCK_BYTES..];
-            let scale = half::f16::from_bits(u16::from_le_bytes([block[0], block[1]])).to_f32();
-            let scale_v = _mm256_set1_ps(scale);
-
-            let input_offset = b * BLOCK_SIZE;
-            let quants = &block[2..];
-
-            // Process 16 bytes = 32 nibbles in 2 groups of 8 bytes
-            // Each byte yields 2 values (lo nibble, hi nibble) paired with consecutive inputs
-            let mut block_acc = _mm256_setzero_ps();
-
-            for g in 0..2 {
-                let g_off = g * 8;
-                let q_ptr = quants[g_off..].as_ptr();
-                let base = input_offset + g * 16;
-
-                // Compute pair sums: lo[j] * input[2j] + hi[j] * input[2j+1]
-                let mut pairs = [0.0f32; 8];
-                for j in 0..8 {
-                    let byte = *q_ptr.add(j);
-                    let lo = (byte & 0x0F) as i32 - 8;
-                    let hi = ((byte >> 4) & 0x0F) as i32 - 8;
-                    pairs[j] =
-                        lo as f32 * input[base + j * 2] + hi as f32 * input[base + j * 2 + 1];
-                }
-
-                let pairs_v = _mm256_loadu_ps(pairs.as_ptr());
-                block_acc = _mm256_add_ps(block_acc, pairs_v);
-            }
-
-            acc = _mm256_fmadd_ps(scale_v, block_acc, acc);
-        }
-
-        // Horizontal sum
-        let hi = _mm256_extractf128_ps(acc, 1);
-        let lo = _mm256_castps256_ps128(acc);
-        let sum128 = _mm_add_ps(lo, hi);
-        let shuf = _mm_movehdup_ps(sum128);
-        let sum64 = _mm_add_ps(sum128, shuf);
-        let shuf2 = _mm_movehl_ps(sum64, sum64);
-        let sum32 = _mm_add_ss(sum64, shuf2);
-        output[r] = _mm_cvtss_f32(sum32);
-    }
-}
-
-/// NEON Q8_0 matvec for aarch64.
-#[cfg(all(target_arch = "aarch64", feature = "simd"))]
-#[allow(clippy::needless_range_loop)]
-unsafe fn matvec_q8_0_neon(
-    data: &[u8],
-    input: &[f32],
-    output: &mut [f32],
-    rows: usize,
-    cols: usize,
-) {
-    use std::arch::aarch64::*;
-
-    const BLOCK_SIZE: usize = 32;
-    const BLOCK_BYTES: usize = 34;
-    let blocks_per_row = cols / BLOCK_SIZE;
-
-    for r in 0..rows {
-        let mut acc = vdupq_n_f32(0.0);
-        let row_offset = r * blocks_per_row * BLOCK_BYTES;
-
-        for b in 0..blocks_per_row {
-            let block = &data[row_offset + b * BLOCK_BYTES..];
-            let scale = half::f16::from_bits(u16::from_le_bytes([block[0], block[1]])).to_f32();
-
-            let input_offset = b * BLOCK_SIZE;
-            let quants = &block[2..];
-
-            let mut block_acc = vdupq_n_f32(0.0);
-
-            // Process 32 elements in 8 groups of 4
-            for g in 0..8 {
-                let g_off = g * 4;
-                // Load 4 int8 values
-                let q_ptr = quants[g_off..].as_ptr() as *const i8;
-                let q_i8 = vld1_s8(q_ptr); // loads 8 but we use first 4
-                let q_i16 = vmovl_s8(q_i8);
-                let q_i32 = vmovl_s16(vget_low_s16(q_i16));
-                let q_f32 = vcvtq_f32_s32(q_i32);
-
-                // Load 4 input f32 values
-                let inp = vld1q_f32(input[input_offset + g_off..].as_ptr());
-
-                // FMA
-                block_acc = vfmaq_f32(block_acc, q_f32, inp);
-            }
-
-            let scale_v = vdupq_n_f32(scale);
-            acc = vfmaq_f32(acc, scale_v, block_acc);
-        }
-
-        // Horizontal sum of 4-wide accumulator
-        output[r] = vaddvq_f32(acc);
     }
 }
 
@@ -852,8 +790,9 @@ impl TransformerModel {
             layer.up_proj.matvec(&xb, &mut ffn_up);
 
             // gate = silu(gate) * up
+            super::kernels::silu_inplace(&mut ffn_gate[..cfg.intermediate_dim]);
             for i in 0..cfg.intermediate_dim {
-                ffn_gate[i] = silu(ffn_gate[i]) * ffn_up[i];
+                ffn_gate[i] *= ffn_up[i];
             }
 
             layer.down_proj.matvec(&ffn_gate, &mut ffn_down);
@@ -1011,8 +950,9 @@ impl TransformerModel {
             layer.gate_proj.matvec(&scratch.xb, &mut scratch.ffn_gate);
             layer.up_proj.matvec(&scratch.xb, &mut scratch.ffn_up);
 
+            super::kernels::silu_inplace(&mut scratch.ffn_gate[..cfg.intermediate_dim]);
             for i in 0..cfg.intermediate_dim {
-                scratch.ffn_gate[i] = silu(scratch.ffn_gate[i]) * scratch.ffn_up[i];
+                scratch.ffn_gate[i] *= scratch.ffn_up[i];
             }
 
             layer
@@ -1199,18 +1139,7 @@ impl KvCache {
 
 /// RMSNorm: output[i] = weight[i] * (x[i] / rms(x))
 fn rms_norm(x: &[f32], weight: &[f32], eps: f32, output: &mut [f32]) {
-    let n = x.len();
-    let ss: f32 = x.iter().map(|&v| v * v).sum::<f32>() / n as f32;
-    let rms = (ss + eps).sqrt();
-    let inv_rms = 1.0 / rms;
-    for i in 0..n {
-        output[i] = weight[i] * (x[i] * inv_rms);
-    }
-}
-
-/// SiLU activation: x * sigmoid(x)
-fn silu(x: f32) -> f32 {
-    x / (1.0 + (-x).exp())
+    super::kernels::rms_norm(x, weight, eps, output);
 }
 
 /// In-place softmax.
@@ -1293,11 +1222,13 @@ mod tests {
 
     #[test]
     fn silu_values() {
-        assert!((silu(0.0) - 0.0).abs() < 1e-6);
-        // silu(1.0) = 1.0 / (1 + exp(-1)) ≈ 0.7311
-        assert!((silu(1.0) - 0.7311).abs() < 0.01);
-        // silu(-1.0) = -1.0 / (1 + exp(1)) ≈ -0.2689
-        assert!((silu(-1.0) - (-0.2689)).abs() < 0.01);
+        let mut x = vec![0.0f32, 1.0, -1.0];
+        crate::ai::kernels::silu_inplace(&mut x);
+        assert!((x[0] - 0.0f32).abs() < 1e-6);
+        // silu(1.0) = 1.0 / (1 + exp(-1)) ~ 0.7311
+        assert!((x[1] - 0.7311f32).abs() < 0.01);
+        // silu(-1.0) = -1.0 / (1 + exp(1)) ~ -0.2689
+        assert!((x[2] - (-0.2689f32)).abs() < 0.01);
     }
 
     #[test]
@@ -1510,8 +1441,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "simd")]
-    fn simd_q8_0_matches_scalar() {
+    fn kernel_dispatch_matches_scalar() {
         // Create a 4x64 Q8_0 matrix (2 blocks per row)
         let values: Vec<Vec<f32>> = (0..4)
             .map(|r| {
@@ -1523,20 +1453,129 @@ mod tests {
         let mat = make_q8_0_matrix(&values);
         let input: Vec<f32> = (0..64).map(|i| (i as f32 + 1.0) * 0.05).collect();
 
-        // Scalar
+        // Scalar kernel directly
         let mut scalar_out = vec![0.0f32; 4];
-        mat.matvec_q8_0_scalar(&input, &mut scalar_out);
+        crate::ai::kernels::scalar::q8_0_matvec(&mat.data, &input, &mut scalar_out, 4, 64);
 
-        // SIMD (via dispatch — uses AVX2 on x86_64, NEON on aarch64)
-        let mut simd_out = vec![0.0f32; 4];
-        mat.matvec_q8_0(&input, &mut simd_out);
+        // Dispatch (uses best available SIMD kernel)
+        let mut dispatch_out = vec![0.0f32; 4];
+        mat.matvec_q8_0(&input, &mut dispatch_out);
 
         for i in 0..4 {
             assert!(
-                (scalar_out[i] - simd_out[i]).abs() < 0.5,
-                "row {i}: scalar={}, simd={}",
+                (scalar_out[i] - dispatch_out[i]).abs() < 0.5,
+                "row {i}: scalar={}, dispatch={}",
                 scalar_out[i],
-                simd_out[i]
+                dispatch_out[i]
+            );
+        }
+    }
+
+    /// Build a Q8_0 matrix with 256 rows (above MIN_PARALLEL_ROWS) for parallel tests.
+    fn make_large_q8_0_matrix(rows: usize, cols: usize) -> WeightMatrix {
+        assert!(cols.is_multiple_of(32));
+        let blocks_per_row = cols / 32;
+        let mut data = Vec::new();
+        for r in 0..rows {
+            for b in 0..blocks_per_row {
+                let scale = half::f16::from_f32(0.01);
+                data.extend_from_slice(&scale.to_bits().to_le_bytes());
+                for j in 0..32 {
+                    data.push(((r + b + j) % 127) as u8);
+                }
+            }
+        }
+        WeightMatrix {
+            data,
+            dtype: GgufDtype::Q8_0,
+            rows,
+            cols,
+        }
+    }
+
+    /// Compute expected dot product for a row of the large Q8_0 matrix.
+    fn expected_q8_0_dot(row: usize, cols: usize, input: &[f32]) -> f32 {
+        let blocks_per_row = cols / 32;
+        let mut sum = 0.0f32;
+        for b in 0..blocks_per_row {
+            let scale = half::f16::from_f32(0.01).to_f32();
+            let mut block_sum = 0.0f32;
+            for j in 0..32 {
+                let val = ((row + b + j) % 127) as u8 as i8;
+                block_sum += val as f32 * input[b * 32 + j];
+            }
+            sum += scale * block_sum;
+        }
+        sum
+    }
+
+    #[test]
+    fn parallel_matvec_q8_0_correctness() {
+        // 256 rows > MIN_PARALLEL_ROWS (128), exercises the parallel path
+        let rows = 256;
+        let cols = 64;
+        let mat = make_large_q8_0_matrix(rows, cols);
+        let input: Vec<f32> = (0..cols).map(|i| (i as f32 + 1.0) * 0.01).collect();
+
+        let mut output = vec![0.0f32; rows];
+        mat.matvec(&input, &mut output);
+
+        for (r, &actual) in output.iter().enumerate() {
+            let expected = expected_q8_0_dot(r, cols, &input);
+            assert!(
+                (actual - expected).abs() < 0.1,
+                "row {r}: expected {expected}, got {actual}",
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_matvec_rows_q8_0_correctness() {
+        // 256 selected rows > MIN_PARALLEL_ROWS, exercises parallel matvec_rows
+        let total_rows = 512;
+        let cols = 64;
+        let mat = make_large_q8_0_matrix(total_rows, cols);
+        let input: Vec<f32> = (0..cols).map(|i| (i as f32 + 1.0) * 0.01).collect();
+
+        // Select 256 rows (every other row)
+        let row_indices: Vec<u32> = (0..total_rows as u32).step_by(2).collect();
+        let mut output = vec![0.0f32; row_indices.len()];
+        mat.matvec_rows(&input, &mut output, &row_indices);
+
+        for (i, &r) in row_indices.iter().enumerate() {
+            let expected = expected_q8_0_dot(r as usize, cols, &input);
+            assert!(
+                (output[i] - expected).abs() < 0.1,
+                "row_indices[{i}] (row {r}): expected {expected}, got {}",
+                output[i]
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_matches_sequential_large_matvec() {
+        // Cross-check: run the same large matrix through matvec and compare
+        // full matvec output against individual row dot products from matvec_rows.
+        let rows = 256;
+        let cols = 64;
+        let mat = make_large_q8_0_matrix(rows, cols);
+        let input: Vec<f32> = (0..cols).map(|i| (i as f32 * 0.003).sin()).collect();
+
+        // Full matvec (parallel path)
+        let mut full_output = vec![0.0f32; rows];
+        mat.matvec(&input, &mut full_output);
+
+        // matvec_rows for all rows (parallel path)
+        let all_indices: Vec<u32> = (0..rows as u32).collect();
+        let mut rows_output = vec![0.0f32; rows];
+        mat.matvec_rows(&input, &mut rows_output, &all_indices);
+
+        for r in 0..rows {
+            assert!(
+                (full_output[r] - rows_output[r]).abs() < 1e-3,
+                "row {r}: matvec={}, matvec_rows={}",
+                full_output[r],
+                rows_output[r]
             );
         }
     }
