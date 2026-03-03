@@ -1302,6 +1302,162 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                 .collect();
             Ok(SqlResult::Rows(rows))
         }
+        Statement::ShowStats => {
+            let db_stats = db.stats()?;
+            let uptime_ms = db.uptime_ms();
+            let cache_hit_rate = db.block_cache().hit_rate();
+            let cache_hits = db.block_cache().hit_count();
+            let cache_misses = db.block_cache().miss_count();
+            let cache_bytes = db.block_cache().size();
+            let cache_entries = db.block_cache().entry_count();
+            let metrics_snap = db.metrics().snapshot();
+            let mut rows: Vec<Vec<u8>> = Vec::new();
+
+            let mut push_row = |metric: &str, value: &str| {
+                let json = serde_json::json!({"metric": metric, "value": value});
+                rows.push(json.to_string().into_bytes());
+            };
+
+            push_row("uptime_ms", &uptime_ms.to_string());
+            push_row("shard_count", &db_stats.shard_count.to_string());
+            push_row("total_puts", &db_stats.puts.to_string());
+            push_row("total_gets", &db_stats.gets.to_string());
+            push_row("total_flushes", &db_stats.flushes.to_string());
+            push_row("total_compactions", &db_stats.compactions.to_string());
+            push_row("bloom_negatives", &db_stats.bloom_negatives.to_string());
+            push_row("mmap_block_reads", &db_stats.mmap_block_reads.to_string());
+            push_row("cache_hit_rate", &format!("{cache_hit_rate:.4}"));
+            push_row("cache_hits", &cache_hits.to_string());
+            push_row("cache_misses", &cache_misses.to_string());
+            push_row("cache_bytes", &cache_bytes.to_string());
+            push_row("cache_entries", &cache_entries.to_string());
+
+            for (name, value) in &metrics_snap.counters {
+                push_row(name, &value.to_string());
+            }
+            for (name, value) in &metrics_snap.gauges {
+                push_row(name, &value.to_string());
+            }
+            for (name, hist) in &metrics_snap.histograms {
+                push_row(&format!("{name}_count"), &hist.count.to_string());
+                push_row(&format!("{name}_avg_us"), &hist.avg_us.to_string());
+                push_row(&format!("{name}_p50_us"), &hist.p50_us.to_string());
+                push_row(&format!("{name}_p99_us"), &hist.p99_us.to_string());
+                push_row(&format!("{name}_max_us"), &hist.max_us.to_string());
+            }
+
+            Ok(SqlResult::Rows(rows))
+        }
+        Statement::ShowSlowQueries => {
+            let entries = db.metrics().slow_query_log().recent(50);
+            let rows: Vec<Vec<u8>> = entries
+                .into_iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "query": e.query,
+                        "duration_us": e.duration_us,
+                        "timestamp_ms": e.timestamp,
+                        "rows_returned": e.rows_returned,
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .collect();
+            Ok(SqlResult::Rows(rows))
+        }
+        Statement::ShowActiveQueries => {
+            let queries = db.active_queries_snapshot();
+            let rows: Vec<Vec<u8>> = queries
+                .into_iter()
+                .map(|(id, aq)| {
+                    let elapsed_ms = aq.start_instant.elapsed().as_millis() as u64;
+                    serde_json::json!({
+                        "query_id": id,
+                        "query": aq.query,
+                        "elapsed_ms": elapsed_ms,
+                        "started_at_ms": aq.started_at_ms,
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .collect();
+            Ok(SqlResult::Rows(rows))
+        }
+        Statement::ShowStorage => {
+            let storage = db.storage_info();
+            let wal_sizes = db.wal_sizes();
+            let wal_map: std::collections::HashMap<usize, u64> = wal_sizes.into_iter().collect();
+            let mut rows: Vec<Vec<u8>> = Vec::new();
+            let mut total_memtable: usize = 0;
+            let mut total_imm: usize = 0;
+            let mut total_sstable: u64 = 0;
+            let mut total_wal: u64 = 0;
+
+            for (shard_id, info) in &storage {
+                let wal_bytes = wal_map.get(shard_id).copied().unwrap_or(0);
+                let sstable_bytes: u64 = info.level_sizes.iter().sum();
+                total_memtable += info.memtable_bytes + info.immutable_memtable_bytes;
+                total_imm += info.immutable_memtable_count;
+                total_sstable += sstable_bytes;
+                total_wal += wal_bytes;
+
+                let json = serde_json::json!({
+                    "shard": shard_id,
+                    "memtable_bytes": info.memtable_bytes,
+                    "immutable_memtables": info.immutable_memtable_count,
+                    "immutable_memtable_bytes": info.immutable_memtable_bytes,
+                    "sstable_bytes": sstable_bytes,
+                    "wal_bytes": wal_bytes,
+                    "l0_files": info.l0_file_count,
+                    "total_sstable_files": info.total_sstable_files,
+                    "level_sizes": info.level_sizes,
+                    "block_cache_bytes": info.block_cache_bytes,
+                    "block_cache_entries": info.block_cache_entries,
+                });
+                rows.push(json.to_string().into_bytes());
+            }
+
+            // Summary row
+            let summary = serde_json::json!({
+                "shard": "TOTAL",
+                "memtable_bytes": total_memtable,
+                "immutable_memtables": total_imm,
+                "sstable_bytes": total_sstable,
+                "wal_bytes": total_wal,
+            });
+            rows.push(summary.to_string().into_bytes());
+
+            Ok(SqlResult::Rows(rows))
+        }
+        Statement::ShowCompactionStatus => {
+            let storage = db.storage_info();
+            let db_stats = db.stats()?;
+            let l0_threshold = db.config().compaction_l0_threshold;
+            let mut rows: Vec<Vec<u8>> = Vec::new();
+
+            for (shard_id, info) in &storage {
+                let needs_compaction = info.l0_file_count >= l0_threshold;
+                let json = serde_json::json!({
+                    "shard": shard_id,
+                    "l0_file_count": info.l0_file_count,
+                    "total_sstable_files": info.total_sstable_files,
+                    "level_sizes": info.level_sizes,
+                    "needs_compaction": needs_compaction,
+                });
+                rows.push(json.to_string().into_bytes());
+            }
+
+            // Global summary
+            let summary = serde_json::json!({
+                "shard": "GLOBAL",
+                "total_flushes": db_stats.flushes,
+                "total_compactions": db_stats.compactions,
+                "l0_threshold": l0_threshold,
+            });
+            rows.push(summary.to_string().into_bytes());
+
+            Ok(SqlResult::Rows(rows))
+        }
         Statement::Describe { table } => {
             validate_table_name(&table)?;
             let schema = load_table_schema(db, session, &table)?;

@@ -53,6 +53,9 @@ pub struct Config {
     pub vector_ivf_threshold: usize,
     /// Default vector encoding: "f32", "f16", or "int8" (default: "f32").
     pub vector_default_encoding: String,
+    // Observability
+    /// Slow query threshold in microseconds (default: 10_000 = 10ms).
+    pub slow_query_threshold_us: u64,
 }
 
 impl Default for Config {
@@ -91,6 +94,7 @@ impl Default for Config {
             vector_hnsw_ef_construction: 200,
             vector_ivf_threshold: 10_000,
             vector_default_encoding: "f32".to_string(),
+            slow_query_threshold_us: 10_000,
         }
     }
 }

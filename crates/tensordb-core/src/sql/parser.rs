@@ -268,6 +268,11 @@ pub enum Statement {
         format: CopyFormat,
     },
     ShowTables,
+    ShowStats,
+    ShowSlowQueries,
+    ShowActiveQueries,
+    ShowStorage,
+    ShowCompactionStatus,
     Describe {
         table: String,
     },
@@ -2194,8 +2199,36 @@ impl Parser {
 
     fn parse_show(&mut self) -> Result<Statement> {
         self.expect_kw("SHOW")?;
-        self.expect_kw("TABLES")?;
-        Ok(Statement::ShowTables)
+        if self.peek_kw("TABLES") {
+            self.expect_kw("TABLES")?;
+            return Ok(Statement::ShowTables);
+        }
+        if self.peek_kw("STATS") {
+            self.expect_kw("STATS")?;
+            return Ok(Statement::ShowStats);
+        }
+        if self.peek_kw("SLOW") {
+            self.expect_kw("SLOW")?;
+            self.expect_kw("QUERIES")?;
+            return Ok(Statement::ShowSlowQueries);
+        }
+        if self.peek_kw("ACTIVE") {
+            self.expect_kw("ACTIVE")?;
+            self.expect_kw("QUERIES")?;
+            return Ok(Statement::ShowActiveQueries);
+        }
+        if self.peek_kw("STORAGE") {
+            self.expect_kw("STORAGE")?;
+            return Ok(Statement::ShowStorage);
+        }
+        if self.peek_kw("COMPACTION") {
+            self.expect_kw("COMPACTION")?;
+            self.expect_kw("STATUS")?;
+            return Ok(Statement::ShowCompactionStatus);
+        }
+        Err(TensorError::SqlParse(
+            "expected TABLES, STATS, SLOW QUERIES, ACTIVE QUERIES, STORAGE, or COMPACTION STATUS after SHOW".to_string(),
+        ))
     }
 
     fn parse_describe(&mut self) -> Result<Statement> {

@@ -2,6 +2,27 @@
 
 All notable changes to TensorDB are documented in this file.
 
+## [0.31] — Observability & Diagnostics
+
+### Added
+- **`SHOW STATS`** — SQL command exposing uptime, shard count, puts/gets/flushes/compactions, cache hit rate, query latency histogram (p50/p99/avg), and all MetricsRegistry counters/gauges/histograms
+- **`SHOW SLOW QUERIES`** — SQL-accessible slow query log with query text, duration_us, timestamp, and rows returned (configurable threshold via `slow_query_threshold_us`)
+- **`SHOW ACTIVE QUERIES`** — List currently running queries with query_id, elapsed_ms, and started_at_ms (includes itself, like PostgreSQL's `pg_stat_activity`)
+- **`SHOW STORAGE`** — Per-shard storage breakdown: memtable bytes, immutable memtable count/bytes, SSTable bytes, WAL bytes, L0 files, level sizes, block cache stats, plus a TOTAL summary row
+- **`SHOW COMPACTION STATUS`** — Per-shard L0 file count, total SSTable files, level sizes, needs_compaction flag, plus global flush/compaction counts
+- **Block cache hit/miss tracking** — `BlockCache` now tracks hits and misses with `AtomicU64` counters; `hit_count()`, `miss_count()`, `hit_rate()` accessors
+- **Health HTTP endpoint** — `/health` JSON endpoint on pgwire port+1 returning uptime, shard count, puts/gets, cache hit rate, SSTable/memtable bytes, and readiness status (uses hyper 1.x)
+- **Active query tracking** — `Database::sql()` registers/deregisters queries with timing, enabling `SHOW ACTIVE QUERIES`
+- **Query metrics** — Every SQL query records execution time in `MetricsRegistry` histogram and slow query log
+- `slow_query_threshold_us` config field (default: 10,000 µs = 10ms)
+- `ShardStorageInfo` struct and `ShardReadHandle::storage_info()` for per-shard storage introspection
+- `Database::metrics()`, `uptime_ms()`, `block_cache()`, `active_queries_snapshot()`, `storage_info()`, `wal_sizes()` accessors
+- 14 new integration tests in `tests/observability.rs` covering all 5 SHOW commands, parser variants, cache hit rate, and query latency histogram
+
+### Changed
+- `Database` struct now holds `MetricsRegistry`, `startup_time`, `block_cache` reference, `active_queries` map, and `next_query_id` counter
+- `tensordb-server` Cargo.toml now depends on `hyper`, `hyper-util`, and `http-body-util` for the health endpoint
+
 ## [0.30] — Advanced Vector Search, Horizontal Scaling, Ecosystem
 
 ### Added

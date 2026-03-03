@@ -8,6 +8,7 @@
 //!   tensordb-server --data-dir ./data --port 5433 --tls-cert cert.pem --tls-key key.pem
 
 mod handler;
+mod health;
 mod pgwire;
 
 use std::path::PathBuf;
@@ -167,6 +168,13 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // Spawn health HTTP server on port + 1
+    let health_port = port + 1;
+    let health_db = Arc::clone(&db);
+    tokio::spawn(async move {
+        health::spawn_health_server(health_db, health_port).await;
+    });
 
     let tls_mode = if tls_acceptor.is_some() {
         "TLS"

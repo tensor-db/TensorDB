@@ -163,7 +163,7 @@ cargo run --example ai_native      # AI runtime: insights, risk scoring, query p
 - **Incremental Backup** — `BACKUP TO '<path>' SINCE EPOCH <n>` for delta exports.
 - **Bitemporal Filtering** — SQL:2011 `SYSTEM_TIME` and `APPLICATION_TIME` temporal clauses.
 - **LSM Storage Engine** — Memtable → SSTable (L0–L6) with bloom filters, prefix compression, mmap reads, LZ4 block compression.
-- **Block & Index Caching** — LRU caches with configurable memory budgets.
+- **Block & Index Caching** — LRU caches with configurable memory budgets, hit/miss tracking via `SHOW STATS`.
 - **Write Batch API** — Atomic multi-key writes with a single WAL frame.
 - **Encryption at Rest** — AES-256-GCM block-level encryption (`--features encryption`).
 
@@ -185,7 +185,7 @@ cargo run --example ai_native      # AI runtime: insights, risk scoring, query p
 ### Data Platform
 - **Change Data Capture** — Prefix-filtered subscriptions, durable cursors, consumer groups with rebalancing.
 - **Data Interchange** — `COPY TO/FROM` CSV, JSON, Parquet. Table functions: `read_csv()`, `read_json()`, `read_parquet()`.
-- **PostgreSQL Wire Protocol** — `tensordb-server` crate accepts Postgres client connections via pgwire.
+- **PostgreSQL Wire Protocol** — `tensordb-server` crate accepts Postgres client connections via pgwire, with `/health` HTTP endpoint on port+1.
 - **Authentication & RBAC** — User management, role-based access control, table-level permissions, session management.
 - **Connection Pooling** — Configurable pool with warmup, idle eviction, and RAII connection guards.
 
@@ -496,7 +496,7 @@ graph TB
 TensorDB is configured through the `Config` struct. All parameters have sensible defaults.
 
 <details>
-<summary><strong>All 25 Configuration Parameters</strong></summary>
+<summary><strong>All 26 Configuration Parameters</strong></summary>
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -525,6 +525,7 @@ TensorDB is configured through the `Config` struct. All parameters have sensible
 | `llm_context_size` | `usize` | `2048` | LLM inference context window size |
 | `llm_schema_cache_ttl_secs` | `u64` | `60` | Schema cache TTL for NL-to-SQL (seconds) |
 | `llm_grammar_constrained` | `bool` | `true` | Enable SQL grammar-constrained decoding |
+| `slow_query_threshold_us` | `u64` | `10_000` | Slow query log threshold (µs) |
 
 </details>
 
@@ -552,7 +553,7 @@ tensordb/
 │   ├── tensordb-distributed/     # Horizontal scaling: routing, 2PC, rebalancing
 │   ├── tensordb-python/         # Python bindings (PyO3 / maturin)
 │   └── tensordb-node/           # Node.js bindings (napi-rs)
-├── tests/                       # 740+ tests across 35 suites
+├── tests/                       # 760+ tests across 36 suites
 ├── benches/                     # Criterion benchmarks (basic, comparative, multi-engine, inference)
 ├── examples/                    # quickstart.rs, bitemporal.rs, ai_native.rs, fastapi, express
 ├── docs/                        # Interactive documentation site (Starlight/Astro)
@@ -649,17 +650,17 @@ cd docs && npm install && npm run dev
 - **v0.2.0** — Embedded LLM (Qwen3 0.6B via pure-Rust native inference engine) with purpose-built SQL-mode optimizations (30x per-token speedup via vocab pruning, SIMD matvec, grammar fusion)
 - **v0.30** — Advanced vector search (VECTOR(n), HNSW/IVF-PQ, hybrid search, temporal vectors), horizontal scaling (tensordb-distributed crate), ecosystem (Docker, CI publish workflows, example apps)
 
-### Phase 1: Observability & Diagnostics
+### ~~Phase 1: Observability & Diagnostics~~ (Done)
 
 Surface the internals so users can answer "what is my database doing?" without guessing.
 
-- **`SHOW STATS`** — SQL command exposing MetricsRegistry: cache hit rates, compaction stats, WAL size, bloom filter false positive rate, shard load distribution
-- **`SHOW SLOW QUERIES`** — SQL-accessible slow query log with query text, duration, rows scanned, plan used
-- **`SHOW ACTIVE QUERIES`** — List currently running queries with elapsed time and resource usage
-- **`SHOW STORAGE`** — Per-table/index/WAL disk space breakdown: data size, index size, tombstone count, compaction amplification ratio
-- **`SHOW COMPACTION STATUS`** — L0 file count, pending compactions, last compaction time, bytes written per level
-- **Live query profiling** — Per-query latency histogram, rows scanned vs returned ratio, cache miss tracking
-- **Health endpoint** — `/health` JSON endpoint for pgwire server with liveness, readiness, and storage metrics
+- ~~**`SHOW STATS`** — SQL command exposing MetricsRegistry: cache hit rates, compaction stats, WAL size, bloom filter false positive rate, shard load distribution~~
+- ~~**`SHOW SLOW QUERIES`** — SQL-accessible slow query log with query text, duration, rows scanned, plan used~~
+- ~~**`SHOW ACTIVE QUERIES`** — List currently running queries with elapsed time and resource usage~~
+- ~~**`SHOW STORAGE`** — Per-shard memtable/SSTable/WAL disk space breakdown with level sizes and block cache stats~~
+- ~~**`SHOW COMPACTION STATUS`** — L0 file count, SSTable files per shard, level sizes, needs_compaction flag~~
+- ~~**Live query profiling** — Per-query latency histogram (p50/p99/avg), slow query log, cache hit/miss tracking~~
+- ~~**Health endpoint** — `/health` JSON endpoint on pgwire port+1 with uptime, shard count, cache hit rate, storage metrics~~
 
 ### Phase 2: Error Quality & Developer Experience
 
