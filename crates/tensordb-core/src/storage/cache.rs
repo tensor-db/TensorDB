@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -20,6 +21,8 @@ struct BlockCacheInner {
 
 pub struct BlockCache {
     inner: Mutex<BlockCacheInner>,
+    hits: AtomicU64,
+    misses: AtomicU64,
 }
 
 impl BlockCache {
@@ -31,6 +34,8 @@ impl BlockCache {
                 current_bytes: 0,
                 max_bytes,
             }),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
         }
     }
 
@@ -46,9 +51,30 @@ impl BlockCache {
                 inner.order.remove(pos);
                 inner.order.push_back(key);
             }
+            self.hits.fetch_add(1, Ordering::Relaxed);
             Some(val)
         } else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
             None
+        }
+    }
+
+    pub fn hit_count(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+
+    pub fn miss_count(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
+
+    pub fn hit_rate(&self) -> f64 {
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
+        let total = hits + misses;
+        if total == 0 {
+            0.0
+        } else {
+            hits as f64 / total as f64
         }
     }
 

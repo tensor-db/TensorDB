@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build (pure Rust, default features include llm)
 cargo build
 
-# Run all tests (~740 tests across 35 suites)
+# Run all tests (~760 tests across 36 suites)
 cargo test --workspace --all-targets
 
 # Run a single test suite
@@ -88,6 +88,7 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 - **EOAC Transactions** — `global_epoch: Arc<AtomicU64>` incremented per commit. Incomplete transactions (missing TXN_COMMIT marker) are rolled back on recovery.
 - **MVCC** — Reads filter by `commit_ts` for snapshot isolation. Temporal queries: `AS OF` (system time), `VALID AT` (business time).
 - **AI Runtime** (`crates/tensordb-core/src/ai/`) — Separate thread receiving `ChangeEvent`s, batching (20ms window, max 16 events), synthesizing insights stored under `__ai/` prefix. Includes embedded LLM (Qwen3 0.6B via pure-Rust native inference engine: GGUF loader, BPE tokenizer, transformer runtime, SQL grammar decoder, schema cache, table-filtered context, rayon-parallelized matvec; feature-gated behind `llm`).
+- **Observability** — `MetricsRegistry` (counters, gauges, histograms, slow query log) wired into `Database::sql()`. 5 SQL diagnostic commands: `SHOW STATS`, `SHOW SLOW QUERIES`, `SHOW ACTIVE QUERIES`, `SHOW STORAGE`, `SHOW COMPACTION STATUS`. Block cache hit/miss tracking. Health HTTP endpoint on pgwire port+1.
 - **CDC** (`crates/tensordb-core/src/cdc/`) — Durable cursors with at-least-once delivery, consumer groups with rebalancing.
 - **Auth/RBAC** (`crates/tensordb-core/src/auth/`) — Users, roles (admin/reader/writer), sessions with TTL, table-level privileges.
 

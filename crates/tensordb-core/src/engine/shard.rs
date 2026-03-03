@@ -84,6 +84,18 @@ pub enum ShardCommand {
     Shutdown,
 }
 
+#[derive(Debug, Clone)]
+pub struct ShardStorageInfo {
+    pub memtable_bytes: usize,
+    pub immutable_memtable_count: usize,
+    pub immutable_memtable_bytes: usize,
+    pub l0_file_count: usize,
+    pub level_sizes: Vec<u64>,
+    pub total_sstable_files: usize,
+    pub block_cache_bytes: usize,
+    pub block_cache_entries: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ShardStats {
     pub puts: u64,
@@ -312,6 +324,40 @@ impl ShardReadHandle {
     /// Used by Database::subscribe() to eagerly disable the fast write path.
     pub fn set_has_subscribers(&self, value: bool) {
         self.shared.has_subscribers.store(value, Ordering::Release);
+    }
+
+    pub fn storage_info(&self) -> ShardStorageInfo {
+        let (memtable_bytes,) = {
+            let memtable = self.shared.active_memtable.read();
+            (memtable.approx_bytes(),)
+        };
+        let (immutable_memtable_count, immutable_memtable_bytes) = {
+            let imms = self.shared.immutable_memtables.read();
+            let count = imms.len();
+            let bytes: usize = imms.iter().map(|m| m.approx_bytes()).sum();
+            (count, bytes)
+        };
+        let (l0_file_count, level_sizes, total_sstable_files) = {
+            let levels = self.shared.levels.read();
+            (
+                levels.l0_count(),
+                levels.level_sizes(),
+                levels.total_file_count(),
+            )
+        };
+        let block_cache_bytes = self.shared.block_cache.size();
+        let block_cache_entries = self.shared.block_cache.entry_count();
+
+        ShardStorageInfo {
+            memtable_bytes,
+            immutable_memtable_count,
+            immutable_memtable_bytes,
+            l0_file_count,
+            level_sizes,
+            total_sstable_files,
+            block_cache_bytes,
+            block_cache_entries,
+        }
     }
 
     pub fn reader_stats(&self) -> ShardStats {

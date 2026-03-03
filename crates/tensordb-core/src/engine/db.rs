@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use crate::config::Config;
 use crate::engine::fast_write::{FastShardState, FastWritePath};
 use crate::engine::shard::{
     ChangeEvent, ShardCommand, ShardOpenParams, ShardReadHandle, ShardRuntime, ShardStats,
-    WriteBatchItem,
+    ShardStorageInfo, WriteBatchItem,
 };
 use crate::error::{Result, TensorError};
 use crate::native_bridge::{build_hasher, Hasher};
@@ -83,6 +84,13 @@ pub struct BenchReport {
     pub hasher_impl: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ActiveQuery {
+    pub query: String,
+    pub started_at_ms: u64,
+    pub start_instant: Instant,
+}
+
 pub struct Database {
     root: PathBuf,
     config: Config,
@@ -99,6 +107,11 @@ pub struct Database {
     global_epoch: Arc<AtomicU64>,
     #[cfg(feature = "llm")]
     llm: Option<Arc<crate::ai::llm::LlmEngine>>,
+    metrics: Arc<crate::util::metrics::MetricsRegistry>,
+    startup_time: Instant,
+    block_cache: Arc<BlockCache>,
+    active_queries: Arc<Mutex<HashMap<u64, ActiveQuery>>>,
+    next_query_id: Arc<AtomicU64>,
 }
 
 impl Database {
@@ -274,6 +287,10 @@ impl Database {
         // Initialize global epoch — start at 1 (0 reserved for non-transactional writes)
         let global_epoch = Arc::new(AtomicU64::new(1));
 
+        let metrics = Arc::new(crate::util::metrics::MetricsRegistry::new(
+            config.slow_query_threshold_us,
+        ));
+
         Ok(Self {
             root,
             config,
@@ -288,6 +305,11 @@ impl Database {
             global_epoch,
             #[cfg(feature = "llm")]
             llm,
+            metrics,
+            startup_time: Instant::now(),
+            block_cache,
+            active_queries: Arc::new(Mutex::new(HashMap::new())),
+            next_query_id: Arc::new(AtomicU64::new(1)),
         })
     }
 
@@ -457,7 +479,49 @@ impl Database {
     }
 
     pub fn sql(&self, query: &str) -> Result<SqlResult> {
-        let result = execute_sql(self, query)?;
+        // Register active query
+        let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.active_queries.lock().insert(
+            query_id,
+            ActiveQuery {
+                query: if query.len() > 500 {
+                    format!("{}...", &query[..500])
+                } else {
+                    query.to_string()
+                },
+                started_at_ms: now_ms,
+                start_instant: Instant::now(),
+            },
+        );
+
+        let start = Instant::now();
+        let result = execute_sql(self, query);
+
+        // Deregister active query
+        self.active_queries.lock().remove(&query_id);
+
+        let result = result?;
+        let elapsed_us = start.elapsed().as_micros() as u64;
+
+        // Record metrics
+        let rows_returned = match &result {
+            SqlResult::Rows(r) => Some(r.len() as u64),
+            SqlResult::Affected { rows, .. } => Some(*rows),
+            _ => None,
+        };
+        self.metrics
+            .slow_query_log()
+            .record(query, elapsed_us, rows_returned);
+        self.metrics
+            .counter("queries_total")
+            .fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .histogram("query_latency_us")
+            .record(elapsed_us);
 
         // Invalidate LLM schema cache after DDL statements
         #[cfg(feature = "llm")]
@@ -580,6 +644,31 @@ impl Database {
         }
 
         Ok(ctx)
+    }
+
+    /// Translate a natural language question to SQL using the embedded LLM
+    /// with Hermes-style tool calling for iterative schema discovery.
+    ///
+    /// The model can call `list_tables`, `describe_table`, and `execute_sql`
+    /// tools to discover the schema and validate SQL before returning a final answer.
+    /// Returns `(generated_sql, execution_result)`.
+    #[cfg(feature = "llm")]
+    pub fn ask_with_tools(&self, question: &str) -> Result<(String, SqlResult)> {
+        let llm = self.llm.as_ref().ok_or(TensorError::LlmNotAvailable)?;
+
+        let (schema, _) = llm
+            .schema_cache()
+            .get_or_compute(|| self.gather_schema_context_inner(), |_| Vec::new())?;
+
+        let result = crate::ai::tool_calling::nl_to_sql_with_tools(llm, question, &schema, self)?;
+
+        match self.sql(&result.sql) {
+            Ok(exec_result) => Ok((result.sql, exec_result)),
+            Err(e) => Err(TensorError::LlmError(format!(
+                "tool-calling generated SQL failed to execute: {e}\n  Generated SQL: {}",
+                result.sql
+            ))),
+        }
     }
 
     pub fn ai_stats(&self) -> AiRuntimeStats {
@@ -750,6 +839,44 @@ impl Database {
         &self.config
     }
 
+    pub fn metrics(&self) -> &Arc<crate::util::metrics::MetricsRegistry> {
+        &self.metrics
+    }
+
+    pub fn uptime_ms(&self) -> u64 {
+        self.startup_time.elapsed().as_millis() as u64
+    }
+
+    pub fn block_cache(&self) -> &Arc<BlockCache> {
+        &self.block_cache
+    }
+
+    pub fn active_queries_snapshot(&self) -> Vec<(u64, ActiveQuery)> {
+        self.active_queries
+            .lock()
+            .iter()
+            .map(|(&id, q)| (id, q.clone()))
+            .collect()
+    }
+
+    pub fn storage_info(&self) -> Vec<(usize, ShardStorageInfo)> {
+        self.shard_read_handles
+            .iter()
+            .enumerate()
+            .map(|(i, rh)| (i, rh.storage_info()))
+            .collect()
+    }
+
+    pub fn wal_sizes(&self) -> Vec<(usize, u64)> {
+        (0..self.config.shard_count)
+            .map(|shard_id| {
+                let wal_path = self.root.join(format!("shard-{shard_id}")).join("wal.log");
+                let size = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+                (shard_id, size)
+            })
+            .collect()
+    }
+
     /// Ensure all pending fast-path WAL records have been flushed to disk.
     /// Call this when you need durability guarantees after fast-path writes.
     pub fn sync(&self) {
@@ -812,4 +939,75 @@ fn percentile(samples: &[u64], p: f64) -> u64 {
     }
     let idx = ((samples.len() - 1) as f64 * p).round() as usize;
     samples[idx.min(samples.len() - 1)]
+}
+
+// ── ToolExecutor implementation for Database ────────────────────────────
+
+#[cfg(feature = "llm")]
+impl crate::ai::tool_calling::ToolExecutor for Database {
+    fn list_tables(&self) -> Result<Vec<String>> {
+        let result = execute_sql(self, "SHOW TABLES")?;
+        match result {
+            SqlResult::Rows(rows) => Ok(rows
+                .into_iter()
+                .filter_map(|row| {
+                    serde_json::from_slice::<serde_json::Value>(&row)
+                        .ok()
+                        .and_then(|v| v.get("table").and_then(|t| t.as_str()).map(String::from))
+                        .or_else(|| String::from_utf8(row).ok())
+                })
+                .collect()),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn describe_table(&self, name: &str) -> Result<Vec<(String, String)>> {
+        let describe_sql = format!("DESCRIBE {name}");
+        let result = execute_sql(self, &describe_sql)?;
+        match result {
+            SqlResult::Rows(rows) => {
+                let mut columns = Vec::new();
+                for row in rows {
+                    if let Ok(text) = String::from_utf8(row) {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                            let col_name = v
+                                .get("column")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("?")
+                                .to_string();
+                            let dtype = v
+                                .get("type")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("TEXT")
+                                .to_string();
+                            columns.push((col_name, dtype));
+                        }
+                    }
+                }
+                Ok(columns)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn execute_sql_tool(&self, sql: &str) -> String {
+        match execute_sql(self, sql) {
+            Ok(SqlResult::Rows(rows)) => {
+                let json_rows: Vec<serde_json::Value> = rows
+                    .into_iter()
+                    .filter_map(|row| {
+                        String::from_utf8(row)
+                            .ok()
+                            .and_then(|s| serde_json::from_str(&s).ok())
+                    })
+                    .collect();
+                serde_json::json!({ "rows": json_rows }).to_string()
+            }
+            Ok(SqlResult::Affected { rows, message, .. }) => {
+                serde_json::json!({ "affected_rows": rows, "message": message }).to_string()
+            }
+            Ok(SqlResult::Explain(plan)) => serde_json::json!({ "plan": plan }).to_string(),
+            Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+        }
+    }
 }

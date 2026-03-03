@@ -74,6 +74,29 @@ config.shard_count = 8;  // More parallelism
 
 ## Monitoring
 
+### SHOW Commands
+
+TensorDB provides 5 diagnostic SQL commands for monitoring:
+
+```sql
+SHOW STATS;              -- Uptime, puts/gets, cache hit rate, query latency histogram
+SHOW SLOW QUERIES;       -- Recent slow queries with duration and row counts
+SHOW ACTIVE QUERIES;     -- Currently running queries with elapsed time
+SHOW STORAGE;            -- Per-shard memtable/SSTable/WAL breakdown
+SHOW COMPACTION STATUS;  -- L0 file counts, level sizes, compaction needs
+```
+
+The slow query threshold is configurable via `slow_query_threshold_us` (default: 10ms).
+
+### Health Endpoint
+
+When running `tensordb-server`, a health HTTP endpoint is available on port+1:
+
+```bash
+curl http://localhost:5434/health | jq .
+# {"status":"healthy","uptime_ms":12345,"shard_count":4,...}
+```
+
 ### EXPLAIN ANALYZE
 
 ```sql

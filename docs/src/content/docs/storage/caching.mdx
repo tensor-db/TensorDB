@@ -29,7 +29,19 @@ Each SSTable has a block index that maps key ranges to block offsets. Caching th
 
 ## Cache Hit Monitoring
 
-Use `EXPLAIN ANALYZE` to see cache hit statistics:
+The block cache tracks hit and miss counts with atomic counters. Use `SHOW STATS` to see the overall cache hit rate:
+
+```sql
+SHOW STATS;
+-- Returns rows including:
+-- {"metric": "cache_hit_rate", "value": "0.8523"}
+-- {"metric": "cache_hits", "value": "12345"}
+-- {"metric": "cache_misses", "value": "2150"}
+-- {"metric": "cache_bytes", "value": "16777216"}
+-- {"metric": "cache_entries", "value": "1024"}
+```
+
+You can also see per-query cache statistics via `EXPLAIN ANALYZE`:
 
 ```sql
 EXPLAIN ANALYZE SELECT * FROM users WHERE id = 'u1';
