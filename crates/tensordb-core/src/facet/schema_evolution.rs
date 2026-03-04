@@ -1,5 +1,5 @@
 use crate::engine::db::Database;
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 /// Key prefix for schema migration history.
 const MIGRATION_PREFIX: &str = "__schema/migration/";
@@ -54,13 +54,13 @@ impl MigrationManager {
     pub fn register(db: &Database, migration: &Migration) -> Result<()> {
         let key = format!("{}{:020}", MIGRATION_PREFIX, migration.version);
         if db.get(key.as_bytes(), None, None)?.is_some() {
-            return Err(TensorError::SqlExec(format!(
+            return Err(sql_exec_err(format!(
                 "migration version {} already exists",
                 migration.version
             )));
         }
         let value = serde_json::to_vec(migration)
-            .map_err(|e| TensorError::SqlExec(format!("failed to serialize migration: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to serialize migration: {e}")))?;
         db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         Ok(())
     }
@@ -68,14 +68,14 @@ impl MigrationManager {
     /// Apply a migration — execute its up_sql statements.
     pub fn apply(db: &Database, version: u64) -> Result<MigrationResult> {
         let key = format!("{}{:020}", MIGRATION_PREFIX, version);
-        let bytes = db.get(key.as_bytes(), None, None)?.ok_or_else(|| {
-            TensorError::SqlExec(format!("migration version {version} not found"))
-        })?;
+        let bytes = db
+            .get(key.as_bytes(), None, None)?
+            .ok_or_else(|| sql_exec_err(format!("migration version {version} not found")))?;
         let mut migration: Migration = serde_json::from_slice(&bytes)
-            .map_err(|e| TensorError::SqlExec(format!("failed to parse migration: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to parse migration: {e}")))?;
 
         if migration.applied_at.is_some() {
-            return Err(TensorError::SqlExec(format!(
+            return Err(sql_exec_err(format!(
                 "migration {} already applied",
                 version
             )));
@@ -94,7 +94,7 @@ impl MigrationManager {
         // Mark as applied
         migration.applied_at = Some(current_timestamp_ms());
         let value = serde_json::to_vec(&migration)
-            .map_err(|e| TensorError::SqlExec(format!("failed to serialize migration: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to serialize migration: {e}")))?;
         db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
 
         Ok(MigrationResult {
@@ -108,14 +108,14 @@ impl MigrationManager {
     /// Rollback a migration — execute its down_sql statements.
     pub fn rollback(db: &Database, version: u64) -> Result<MigrationResult> {
         let key = format!("{}{:020}", MIGRATION_PREFIX, version);
-        let bytes = db.get(key.as_bytes(), None, None)?.ok_or_else(|| {
-            TensorError::SqlExec(format!("migration version {version} not found"))
-        })?;
+        let bytes = db
+            .get(key.as_bytes(), None, None)?
+            .ok_or_else(|| sql_exec_err(format!("migration version {version} not found")))?;
         let mut migration: Migration = serde_json::from_slice(&bytes)
-            .map_err(|e| TensorError::SqlExec(format!("failed to parse migration: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to parse migration: {e}")))?;
 
         if migration.applied_at.is_none() {
-            return Err(TensorError::SqlExec(format!(
+            return Err(sql_exec_err(format!(
                 "migration {} was not applied",
                 version
             )));
@@ -134,7 +134,7 @@ impl MigrationManager {
         // Mark as un-applied
         migration.applied_at = None;
         let value = serde_json::to_vec(&migration)
-            .map_err(|e| TensorError::SqlExec(format!("failed to serialize migration: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to serialize migration: {e}")))?;
         db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
 
         Ok(MigrationResult {
@@ -200,7 +200,7 @@ impl SchemaRegistry {
             SCHEMA_VERSION_PREFIX, schema.table_name, schema.version
         );
         let value = serde_json::to_vec(schema)
-            .map_err(|e| TensorError::SqlExec(format!("failed to serialize schema: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to serialize schema: {e}")))?;
         db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         Ok(())
     }

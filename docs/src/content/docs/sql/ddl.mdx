@@ -60,17 +60,30 @@ Dropping a table removes its metadata from `__meta/table/<name>`. Row data becom
 
 ## ALTER TABLE
 
+### ADD COLUMN
+
 ```sql
--- Add a column
 ALTER TABLE users ADD COLUMN phone TEXT;
+```
 
--- Drop a column
+Adds a new column to the table schema. Existing rows return `NULL` for the new column.
+
+### DROP COLUMN
+
+```sql
 ALTER TABLE users DROP COLUMN phone;
+```
 
--- Rename a column
+Removes a column from the table schema. This is a metadata-only operation — existing rows are not rewritten. The dropped column is excluded from all future projections. Primary key columns cannot be dropped.
+
+### RENAME COLUMN
+
+```sql
 ALTER TABLE users RENAME COLUMN email TO email_address;
 ```
 
+Renames a column in the table schema. A `column_aliases` mapping is maintained so that existing rows stored with the old column name are automatically mapped to the new name on read.
+
 :::caution
-ALTER TABLE operations modify the table metadata. Existing rows are not rewritten — new columns on existing rows return NULL.
+ALTER TABLE operations modify table metadata only. Existing rows on disk are not rewritten — ADD COLUMN returns NULL on old rows, DROP COLUMN excludes the column from projections, and RENAME COLUMN uses an alias map for backward compatibility.
 :::

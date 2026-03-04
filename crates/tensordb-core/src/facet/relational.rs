@@ -1,4 +1,4 @@
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 use serde::{Deserialize, Serialize};
 
 const TABLE_META_PREFIX: &str = "__meta/table";
@@ -22,6 +22,9 @@ pub struct TableSchemaMetadata {
     pub columns: Vec<TableColumnMetadata>,
     #[serde(default = "default_schema_mode")]
     pub schema_mode: String,
+    /// Maps old column names to new column names after RENAME COLUMN.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub column_aliases: std::collections::HashMap<String, String>,
 }
 
 impl Default for TableSchemaMetadata {
@@ -31,6 +34,7 @@ impl Default for TableSchemaMetadata {
             doc: default_doc_type(),
             columns: Vec::new(),
             schema_mode: default_schema_mode(),
+            column_aliases: std::collections::HashMap::new(),
         }
     }
 }
@@ -156,15 +160,13 @@ pub fn validate_index_name(name: &str) -> Result<()> {
 
 fn validate_identifier_kind(kind: &str, name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(TensorError::SqlExec(format!("{kind} name cannot be empty")));
+        return Err(sql_exec_err(format!("{kind} name cannot be empty")));
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        return Err(TensorError::SqlExec(format!(
-            "{kind} name must be ascii alnum/_/-"
-        )));
+        return Err(sql_exec_err(format!("{kind} name must be ascii alnum/_/-")));
     }
     Ok(())
 }
@@ -203,12 +205,10 @@ pub fn validate_json_bytes(doc: &[u8]) -> Result<()> {
 
 pub fn validate_pk(pk: &str) -> Result<()> {
     if pk.is_empty() {
-        return Err(TensorError::SqlExec("pk cannot be empty".to_string()));
+        return Err(sql_exec_err("pk cannot be empty"));
     }
     if pk.contains('\0') {
-        return Err(TensorError::SqlExec(
-            "pk must not contain null bytes".to_string(),
-        ));
+        return Err(sql_exec_err("pk must not contain null bytes".to_string()));
     }
     Ok(())
 }
@@ -252,6 +252,7 @@ mod tests {
                 },
             ],
             schema_mode: "legacy".to_string(),
+            column_aliases: std::collections::HashMap::new(),
         };
         let bytes = encode_schema_metadata(&input).unwrap();
         let output = parse_schema_metadata(&bytes).unwrap();

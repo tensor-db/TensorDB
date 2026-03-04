@@ -5,40 +5,39 @@ title: Authentication
 description: Authentication mechanisms for TensorDB access control.
 ---
 
-:::note[Roadmap Feature]
-Authentication is planned for a future release. Current TensorDB is an embedded database with no built-in authentication layer.
-:::
+## User Management
 
-## Current State
+TensorDB provides built-in user authentication with password-based credentials.
 
-As an embedded database, TensorDB runs within your application process. Access control is managed at the application level.
+```sql
+-- Create a user
+CREATE USER alice WITH PASSWORD 'secret123';
 
-## Planned Authentication
+-- Change password
+ALTER USER alice SET PASSWORD 'newsecret';
 
-### API Key Authentication
+-- Disable a user
+ALTER USER alice DISABLE;
 
-```rust
-let config = Config::default();
-config.auth_enabled = true;
-config.auth_api_keys = vec![
-    ApiKey { key: "sk_prod_...", role: Role::Admin },
-    ApiKey { key: "sk_read_...", role: Role::ReadOnly },
-];
-let db = Database::open("data", config)?;
+-- Grant roles
+GRANT admin TO alice;
+GRANT reader TO bob;
+
+-- Revoke roles
+REVOKE admin FROM alice;
 ```
 
-### Token-Based Authentication
+## Session Management
 
-For network-accessible deployments:
-- JWT token validation
-- Token expiration and refresh
-- Scope-based permissions
+Sessions are token-based with configurable TTL:
+- Token-based authentication for API access
+- Session expiration with automatic cleanup
+- Session revocation for immediate logout
 
-## Security Best Practices (Current)
-
-Even without built-in authentication:
+## Security Best Practices
 
 - **File permissions**: Restrict access to the data directory
-- **Encryption at rest**: Use filesystem-level encryption (LUKS, FileVault)
-- **Network isolation**: Don't expose the database directory over the network
+- **Encryption at rest**: Enable with `--features encryption` for AES-256-GCM block-level encryption
+- **Network isolation**: When using pgwire server, bind to localhost unless TLS is configured
 - **Application-level auth**: Validate users in your application before database calls
+- **Audit logging**: Enable and monitor the audit log via `SHOW AUDIT LOG`

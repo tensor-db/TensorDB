@@ -56,6 +56,16 @@ pub struct Config {
     // Observability
     /// Slow query threshold in microseconds (default: 10_000 = 10ms).
     pub slow_query_threshold_us: u64,
+    // Strict mode
+    pub strict_mode: bool,
+    // Compaction scheduling
+    pub compaction_window_start_hour: Option<u8>,
+    pub compaction_window_end_hour: Option<u8>,
+    // WAL management
+    pub wal_archive_enabled: bool,
+    pub wal_archive_dir: Option<String>,
+    pub wal_retention_count: usize,
+    pub wal_max_bytes: Option<u64>,
 }
 
 impl Default for Config {
@@ -95,6 +105,13 @@ impl Default for Config {
             vector_ivf_threshold: 10_000,
             vector_default_encoding: "f32".to_string(),
             slow_query_threshold_us: 10_000,
+            strict_mode: false,
+            compaction_window_start_hour: None,
+            compaction_window_end_hour: None,
+            wal_archive_enabled: false,
+            wal_archive_dir: None,
+            wal_retention_count: 10,
+            wal_max_bytes: None,
         }
     }
 }

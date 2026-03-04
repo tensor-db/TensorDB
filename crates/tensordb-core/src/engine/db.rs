@@ -112,6 +112,8 @@ pub struct Database {
     block_cache: Arc<BlockCache>,
     active_queries: Arc<Mutex<HashMap<u64, ActiveQuery>>>,
     next_query_id: Arc<AtomicU64>,
+    audit_log: Arc<crate::auth::audit::AuditLog>,
+    compaction_window: Arc<parking_lot::RwLock<Option<(u8, u8)>>>,
 }
 
 impl Database {
@@ -310,6 +312,8 @@ impl Database {
             block_cache,
             active_queries: Arc::new(Mutex::new(HashMap::new())),
             next_query_id: Arc::new(AtomicU64::new(1)),
+            audit_log: Arc::new(crate::auth::audit::AuditLog::new()),
+            compaction_window: Arc::new(parking_lot::RwLock::new(None)),
         })
     }
 
@@ -875,6 +879,42 @@ impl Database {
                 (shard_id, size)
             })
             .collect()
+    }
+
+    pub fn audit_log(&self) -> &Arc<crate::auth::audit::AuditLog> {
+        &self.audit_log
+    }
+
+    pub fn compaction_window(&self) -> Option<(u8, u8)> {
+        *self.compaction_window.read()
+    }
+
+    pub fn set_compaction_window(&self, start_hour: u8, end_hour: u8) {
+        *self.compaction_window.write() = Some((start_hour, end_hour));
+    }
+
+    pub fn clear_compaction_window(&self) {
+        *self.compaction_window.write() = None;
+    }
+
+    /// Request compaction on a specific shard.
+    pub fn request_compaction(&self, shard_id: usize) -> Result<()> {
+        if shard_id >= self.shard_senders.len() {
+            return Err(crate::error::sql_exec_err(format!(
+                "shard {shard_id} does not exist"
+            )));
+        }
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let _ = self.shard_senders[shard_id].send(ShardCommand::ForceCompaction { resp: tx });
+        rx.recv().map_err(|_| TensorError::ChannelClosed)?
+    }
+
+    /// Request compaction on all shards.
+    pub fn request_compaction_all(&self) -> Result<()> {
+        for shard_id in 0..self.shard_senders.len() {
+            self.request_compaction(shard_id)?;
+        }
+        Ok(())
     }
 
     /// Ensure all pending fast-path WAL records have been flushed to disk.

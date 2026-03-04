@@ -44,9 +44,23 @@ On startup, TensorDB replays each shard's WAL from the last checkpoint:
 3. Replay valid records into the memtable
 4. Discard records with CRC mismatches (partial writes from crash)
 
+## WAL Monitoring
+
+Monitor WAL status across all shards:
+
+```sql
+SHOW WAL STATUS;
+```
+
+Returns per-shard information including shard ID and WAL file size in bytes.
+
 ## Configuration
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `wal_fsync_every_n_records` | 128 | Fsync frequency for channel-path WAL |
 | `fast_write_wal_batch_interval_us` | 1000 | Batch window for group WAL |
+| `wal_archive_enabled` | `false` | Enable WAL archival before truncation |
+| `wal_archive_dir` | `None` | Directory for WAL archives |
+| `wal_retention_count` | 10 | Maximum number of archived WAL files to retain |
+| `wal_max_bytes` | `None` | Force memtable flush when WAL exceeds this size |

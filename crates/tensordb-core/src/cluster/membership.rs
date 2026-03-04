@@ -1,5 +1,5 @@
 use crate::engine::db::Database;
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 /// Key prefix for node registry.
 const NODE_PREFIX: &str = "__cluster/node/";
@@ -72,7 +72,7 @@ impl NodeRegistry {
         if let Some(bytes) = db.get(key.as_bytes(), None, None)? {
             if let Ok(existing) = serde_json::from_slice::<NodeInfo>(&bytes) {
                 if existing.status != NodeStatus::Down {
-                    return Err(TensorError::SqlExec(format!(
+                    return Err(sql_exec_err(format!(
                         "node already registered: {}",
                         node.node_id
                     )));
@@ -80,7 +80,7 @@ impl NodeRegistry {
             }
         }
         let value = serde_json::to_vec(node)
-            .map_err(|e| TensorError::SqlExec(format!("failed to serialize node: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to serialize node: {e}")))?;
         db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         Ok(())
     }
@@ -89,7 +89,7 @@ impl NodeRegistry {
     pub fn update_node(db: &Database, node: &NodeInfo) -> Result<()> {
         let key = format!("{}{}", NODE_PREFIX, node.node_id);
         let value = serde_json::to_vec(node)
-            .map_err(|e| TensorError::SqlExec(format!("failed to serialize node: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to serialize node: {e}")))?;
         db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         Ok(())
     }
@@ -100,7 +100,7 @@ impl NodeRegistry {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let node: NodeInfo = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse node: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse node: {e}")))?;
                 Ok(Some(node))
             }
             None => Ok(None),
@@ -165,9 +165,8 @@ impl NodeRegistry {
     pub fn get_cluster_config(db: &Database) -> Result<ClusterConfig> {
         match db.get(CLUSTER_CONFIG_KEY.as_bytes(), None, None)? {
             Some(bytes) => {
-                let config: ClusterConfig = serde_json::from_slice(&bytes).map_err(|e| {
-                    TensorError::SqlExec(format!("failed to parse cluster config: {e}"))
-                })?;
+                let config: ClusterConfig = serde_json::from_slice(&bytes)
+                    .map_err(|e| sql_exec_err(format!("failed to parse cluster config: {e}")))?;
                 Ok(config)
             }
             None => Ok(ClusterConfig::default()),
@@ -176,9 +175,8 @@ impl NodeRegistry {
 
     /// Save cluster configuration.
     pub fn save_cluster_config(db: &Database, config: &ClusterConfig) -> Result<()> {
-        let value = serde_json::to_vec(config).map_err(|e| {
-            TensorError::SqlExec(format!("failed to serialize cluster config: {e}"))
-        })?;
+        let value = serde_json::to_vec(config)
+            .map_err(|e| sql_exec_err(format!("failed to serialize cluster config: {e}")))?;
         db.put(CLUSTER_CONFIG_KEY.as_bytes(), value, 0, u64::MAX, None)?;
         Ok(())
     }

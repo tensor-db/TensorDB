@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build (pure Rust, default features include llm)
 cargo build
 
-# Run all tests (~760 tests across 36 suites)
+# Run all tests (~800 tests across 51 suites)
 cargo test --workspace --all-targets
 
 # Run a single test suite
@@ -88,9 +88,11 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 - **EOAC Transactions** — `global_epoch: Arc<AtomicU64>` incremented per commit. Incomplete transactions (missing TXN_COMMIT marker) are rolled back on recovery.
 - **MVCC** — Reads filter by `commit_ts` for snapshot isolation. Temporal queries: `AS OF` (system time), `VALID AT` (business time).
 - **AI Runtime** (`crates/tensordb-core/src/ai/`) — Separate thread receiving `ChangeEvent`s, batching (20ms window, max 16 events), synthesizing insights stored under `__ai/` prefix. Includes embedded LLM (Qwen3 0.6B via pure-Rust native inference engine: GGUF loader, BPE tokenizer, transformer runtime, SQL grammar decoder, schema cache, table-filtered context, rayon-parallelized matvec; feature-gated behind `llm`).
-- **Observability** — `MetricsRegistry` (counters, gauges, histograms, slow query log) wired into `Database::sql()`. 5 SQL diagnostic commands: `SHOW STATS`, `SHOW SLOW QUERIES`, `SHOW ACTIVE QUERIES`, `SHOW STORAGE`, `SHOW COMPACTION STATUS`. Block cache hit/miss tracking. Health HTTP endpoint on pgwire port+1.
+- **Observability** — `MetricsRegistry` (counters, gauges, histograms, slow query log) wired into `Database::sql()`. 8 SQL diagnostic commands: `SHOW STATS`, `SHOW SLOW QUERIES`, `SHOW ACTIVE QUERIES`, `SHOW STORAGE`, `SHOW COMPACTION STATUS`, `SHOW WAL STATUS`, `SHOW AUDIT LOG`, `SHOW PLAN GUIDES`. Block cache hit/miss tracking. Health HTTP endpoint on pgwire port+1.
+- **Structured Errors** — `ErrorCode` enum (T1xxx syntax, T2xxx schema, T3xxx constraint, T4xxx execution, T6xxx auth) with `SqlError` struct carrying code, message, suggestion, position. Levenshtein fuzzy matching for "Did you mean?" suggestions.
 - **CDC** (`crates/tensordb-core/src/cdc/`) — Durable cursors with at-least-once delivery, consumer groups with rebalancing.
-- **Auth/RBAC** (`crates/tensordb-core/src/auth/`) — Users, roles (admin/reader/writer), sessions with TTL, table-level privileges.
+- **Auth/RBAC** (`crates/tensordb-core/src/auth/`) — Users, roles (admin/reader/writer), sessions with TTL, table-level privileges. Audit log (`audit.rs`), row-level security policies (`rls.rs`), GDPR erasure (`FORGET KEY`).
+- **Plan Stability** (`crates/tensordb-core/src/sql/plan_guide.rs`) — `PlanGuideManager` for pinning query plans via `CREATE PLAN GUIDE`.
 
 ### Internal Key Prefixes
 
@@ -104,6 +106,9 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 - `__vec_idx/{table}/{column}/...` — Vector index structures (HNSW graph, IVF centroids, PQ codebook)
 - `__ai/insight/{hex_key}/{commit_ts}` — AI-generated insights
 - `__ai/correlation/{cluster_id}/{commit_ts}/{hex_key}` — AI correlation refs
+- `__meta/policy/{table}/{name}` — Row-level security policies
+- `__meta/plan_guide/{name}` — Plan guide definitions
+- `__audit_log/{timestamp}/{seq}` — Audit log events
 
 ### Concurrency Model
 

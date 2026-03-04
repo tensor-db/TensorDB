@@ -1,4 +1,4 @@
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 use crate::sql::parser::SqlType;
 use crate::util::varint;
 
@@ -51,26 +51,22 @@ impl TypedValue {
                     } else if let Some(f) = n.as_f64() {
                         Ok(TypedValue::Integer(f as i64))
                     } else {
-                        Err(TensorError::SqlExec("cannot convert to INTEGER".into()))
+                        Err(sql_exec_err("cannot convert to INTEGER"))
                     }
                 }
                 serde_json::Value::String(s) => s
                     .parse::<i64>()
                     .map(TypedValue::Integer)
-                    .map_err(|_| TensorError::SqlExec(format!("cannot parse '{s}' as INTEGER"))),
-                _ => Err(TensorError::SqlExec(format!(
-                    "cannot convert {val} to INTEGER"
-                ))),
+                    .map_err(|_| sql_exec_err(format!("cannot parse '{s}' as INTEGER"))),
+                _ => Err(sql_exec_err(format!("cannot convert {val} to INTEGER"))),
             },
             SqlType::Real => match val {
                 serde_json::Value::Number(n) => Ok(TypedValue::Real(n.as_f64().unwrap_or(0.0))),
                 serde_json::Value::String(s) => s
                     .parse::<f64>()
                     .map(TypedValue::Real)
-                    .map_err(|_| TensorError::SqlExec(format!("cannot parse '{s}' as REAL"))),
-                _ => Err(TensorError::SqlExec(format!(
-                    "cannot convert {val} to REAL"
-                ))),
+                    .map_err(|_| sql_exec_err(format!("cannot parse '{s}' as REAL"))),
+                _ => Err(sql_exec_err(format!("cannot convert {val} to REAL"))),
             },
             SqlType::Text => match val {
                 serde_json::Value::String(s) => Ok(TypedValue::Text(s.clone())),
@@ -82,45 +78,35 @@ impl TypedValue {
                 serde_json::Value::String(s) => match s.to_lowercase().as_str() {
                     "true" | "1" | "yes" => Ok(TypedValue::Boolean(true)),
                     "false" | "0" | "no" => Ok(TypedValue::Boolean(false)),
-                    _ => Err(TensorError::SqlExec(format!(
-                        "cannot parse '{s}' as BOOLEAN"
-                    ))),
+                    _ => Err(sql_exec_err(format!("cannot parse '{s}' as BOOLEAN"))),
                 },
-                _ => Err(TensorError::SqlExec(format!(
-                    "cannot convert {val} to BOOLEAN"
-                ))),
+                _ => Err(sql_exec_err(format!("cannot convert {val} to BOOLEAN"))),
             },
             SqlType::Blob => match val {
                 serde_json::Value::String(s) => Ok(TypedValue::Blob(s.as_bytes().to_vec())),
-                _ => Err(TensorError::SqlExec("BLOB requires string value".into())),
+                _ => Err(sql_exec_err("BLOB requires string value")),
             },
             SqlType::Json => Ok(TypedValue::Text(val.to_string())),
             SqlType::Decimal { .. } => match val {
                 serde_json::Value::Number(n) => {
                     use std::str::FromStr;
-                    let d = rust_decimal::Decimal::from_str(&n.to_string()).map_err(|e| {
-                        TensorError::SqlExec(format!("cannot parse as DECIMAL: {e}"))
-                    })?;
+                    let d = rust_decimal::Decimal::from_str(&n.to_string())
+                        .map_err(|e| sql_exec_err(format!("cannot parse as DECIMAL: {e}")))?;
                     Ok(TypedValue::Decimal(d))
                 }
                 serde_json::Value::String(s) => {
                     use std::str::FromStr;
-                    let d = rust_decimal::Decimal::from_str(s).map_err(|e| {
-                        TensorError::SqlExec(format!("cannot parse '{s}' as DECIMAL: {e}"))
-                    })?;
+                    let d = rust_decimal::Decimal::from_str(s)
+                        .map_err(|e| sql_exec_err(format!("cannot parse '{s}' as DECIMAL: {e}")))?;
                     Ok(TypedValue::Decimal(d))
                 }
-                _ => Err(TensorError::SqlExec(format!(
-                    "cannot convert {val} to DECIMAL"
-                ))),
+                _ => Err(sql_exec_err(format!("cannot convert {val} to DECIMAL"))),
             },
             // VECTOR columns are stored as text (JSON array string) in the columnar format
             SqlType::Vector { .. } => match val {
                 serde_json::Value::String(s) => Ok(TypedValue::Text(s.clone())),
                 serde_json::Value::Array(_) => Ok(TypedValue::Text(val.to_string())),
-                _ => Err(TensorError::SqlExec(format!(
-                    "cannot convert {val} to VECTOR"
-                ))),
+                _ => Err(sql_exec_err(format!("cannot convert {val} to VECTOR"))),
             },
         }
     }
@@ -179,7 +165,7 @@ pub fn decode_row(data: &[u8], types: &[SqlType]) -> Result<Vec<TypedValue>> {
     let n_cols = types.len();
     let bitmap_bytes = n_cols.div_ceil(8);
     if data.len() < bitmap_bytes {
-        return Err(TensorError::SqlExec("row data too short".into()));
+        return Err(sql_exec_err("row data too short"));
     }
 
     let bitmap = &data[..bitmap_bytes];
@@ -196,7 +182,7 @@ pub fn decode_row(data: &[u8], types: &[SqlType]) -> Result<Vec<TypedValue>> {
         match col_type {
             SqlType::Integer => {
                 if offset + 8 > data.len() {
-                    return Err(TensorError::SqlExec("truncated INTEGER".into()));
+                    return Err(sql_exec_err("truncated INTEGER"));
                 }
                 let n = i64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
                 offset += 8;
@@ -204,7 +190,7 @@ pub fn decode_row(data: &[u8], types: &[SqlType]) -> Result<Vec<TypedValue>> {
             }
             SqlType::Real => {
                 if offset + 8 > data.len() {
-                    return Err(TensorError::SqlExec("truncated REAL".into()));
+                    return Err(sql_exec_err("truncated REAL"));
                 }
                 let f = f64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
                 offset += 8;
@@ -213,7 +199,7 @@ pub fn decode_row(data: &[u8], types: &[SqlType]) -> Result<Vec<TypedValue>> {
             SqlType::Text | SqlType::Json => {
                 let len = varint::decode_u64(data, &mut offset)? as usize;
                 if offset + len > data.len() {
-                    return Err(TensorError::SqlExec("truncated TEXT".into()));
+                    return Err(sql_exec_err("truncated TEXT"));
                 }
                 let s = String::from_utf8_lossy(&data[offset..offset + len]).into_owned();
                 offset += len;
@@ -221,7 +207,7 @@ pub fn decode_row(data: &[u8], types: &[SqlType]) -> Result<Vec<TypedValue>> {
             }
             SqlType::Boolean => {
                 if offset >= data.len() {
-                    return Err(TensorError::SqlExec("truncated BOOLEAN".into()));
+                    return Err(sql_exec_err("truncated BOOLEAN"));
                 }
                 values.push(TypedValue::Boolean(data[offset] != 0));
                 offset += 1;
@@ -229,14 +215,14 @@ pub fn decode_row(data: &[u8], types: &[SqlType]) -> Result<Vec<TypedValue>> {
             SqlType::Blob => {
                 let len = varint::decode_u64(data, &mut offset)? as usize;
                 if offset + len > data.len() {
-                    return Err(TensorError::SqlExec("truncated BLOB".into()));
+                    return Err(sql_exec_err("truncated BLOB"));
                 }
                 values.push(TypedValue::Blob(data[offset..offset + len].to_vec()));
                 offset += len;
             }
             SqlType::Decimal { .. } => {
                 if offset + 16 > data.len() {
-                    return Err(TensorError::SqlExec("truncated DECIMAL".into()));
+                    return Err(sql_exec_err("truncated DECIMAL"));
                 }
                 let mut bytes = [0u8; 16];
                 bytes.copy_from_slice(&data[offset..offset + 16]);
@@ -248,7 +234,7 @@ pub fn decode_row(data: &[u8], types: &[SqlType]) -> Result<Vec<TypedValue>> {
             SqlType::Vector { .. } => {
                 let len = varint::decode_u64(data, &mut offset)? as usize;
                 if offset + len > data.len() {
-                    return Err(TensorError::SqlExec("truncated VECTOR".into()));
+                    return Err(sql_exec_err("truncated VECTOR"));
                 }
                 let s = String::from_utf8_lossy(&data[offset..offset + len]).into_owned();
                 offset += len;

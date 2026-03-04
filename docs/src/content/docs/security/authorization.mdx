@@ -2,14 +2,12 @@
 draft: false
 head: []
 title: Authorization
-description: Role-based access control for TensorDB.
+description: Role-based access control, row-level security, audit logging, and GDPR erasure in TensorDB.
 ---
 
-:::note[Roadmap Feature]
-Authorization is planned for a future release.
-:::
+## RBAC Model
 
-## Planned RBAC Model
+TensorDB provides role-based access control with table-level permissions.
 
 ### Roles
 
@@ -18,7 +16,6 @@ Authorization is planned for a future release.
 | Admin | Full access — DDL, DML, configuration, AI features |
 | ReadWrite | DML (INSERT, UPDATE, DELETE) + SELECT |
 | ReadOnly | SELECT only |
-| AIAdmin | AI feature configuration and insight access |
 
 ### Table-Level Permissions
 
@@ -33,24 +30,100 @@ GRANT INSERT, UPDATE ON orders TO role_readwrite;
 REVOKE ALL ON admin_logs FROM role_readwrite;
 ```
 
-### Key Prefix Permissions
+---
 
-For the key-value API, permissions can be scoped to key prefixes:
+## Row-Level Security
 
-```rust
-// Only allow reads under "public/" prefix
-config.auth_prefix_rules = vec![
-    PrefixRule { prefix: "public/", role: Role::ReadOnly, allow: true },
-    PrefixRule { prefix: "__ai/", role: Role::AIAdmin, allow: true },
-];
+Row-level security (RLS) policies restrict which rows a user can access based on SQL predicates.
+
+### CREATE POLICY
+
+```sql
+-- Only allow users to see their own rows
+CREATE POLICY user_isolation ON orders
+  FOR SELECT
+  TO analyst, viewer
+  USING (owner = CURRENT_USER);
+
+-- Restrict deletes to admin role
+CREATE POLICY admin_delete ON orders
+  FOR DELETE
+  TO admin
+  USING (1 = 1);
+
+-- Policy for all operations
+CREATE POLICY tenant_isolation ON data
+  FOR ALL
+  USING (tenant_id = CURRENT_USER);
 ```
 
-## Audit Logging
+### DROP POLICY
 
-All access attempts (successful and denied) are logged:
-- Who accessed what (key or table)
-- When (commit_ts)
-- What operation (read, write, DDL)
-- Result (allowed, denied)
+```sql
+DROP POLICY user_isolation ON orders;
+```
 
-TensorDB's immutable ledger naturally provides an audit trail for all write operations.
+### Policy Operations
+
+| Operation | Applies To |
+|-----------|-----------|
+| `SELECT` | Read queries |
+| `INSERT` | Insert operations |
+| `UPDATE` | Update operations |
+| `DELETE` | Delete operations |
+| `ALL` | All operations |
+
+Policies are stored under `__meta/policy/{table}/{name}` and are evaluated at query time against the session user and roles.
+
+---
+
+## Audit Log
+
+TensorDB maintains an append-only audit log of all security-relevant operations.
+
+### Querying the Audit Log
+
+```sql
+-- Show recent audit events
+SHOW AUDIT LOG;
+SHOW AUDIT LOG LIMIT 50;
+```
+
+### Tracked Events
+
+| Event Type | Trigger |
+|-----------|---------|
+| `TableCreated` | `CREATE TABLE` |
+| `TableDropped` | `DROP TABLE` |
+| `IndexCreated` | `CREATE INDEX` |
+| `IndexDropped` | `DROP INDEX` |
+| `ViewCreated` | `CREATE VIEW` |
+| `ViewDropped` | `DROP VIEW` |
+| `PolicyCreated` | `CREATE POLICY` |
+| `PolicyDropped` | `DROP POLICY` |
+| `GdprErasure` | `FORGET KEY` |
+| `Login` | User authentication |
+| `UserCreated` | User creation |
+| `RoleGranted` | Role grant |
+| `RoleRevoked` | Role revocation |
+
+Audit events are stored under `__audit_log/` prefix with monotonically increasing sequence numbers. Events are immutable — they cannot be modified or deleted.
+
+---
+
+## GDPR Erasure
+
+The `FORGET KEY` command supports GDPR right-to-erasure by tombstoning all temporal versions of a record.
+
+```sql
+-- Erase all versions of a specific key
+FORGET KEY 'user_123' FROM customers;
+```
+
+This command:
+1. Scans all temporal versions of the key in the specified table
+2. Writes empty-doc tombstones for every version found
+3. Triggers compaction to physically remove the data
+4. Records the erasure in the audit log
+
+After erasure, historical `AS OF` queries will no longer return the erased key.

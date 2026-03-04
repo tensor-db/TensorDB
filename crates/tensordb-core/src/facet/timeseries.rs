@@ -9,7 +9,7 @@
 //! - Bucketed storage for efficient range queries
 //! - Downsampling support (avg, min, max per bucket)
 
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 const TS_PREFIX: &str = "__ts";
 const DEFAULT_BUCKET_SIZE: u64 = 3600; // 1 hour in seconds
@@ -58,7 +58,7 @@ impl Bucket {
     }
 
     pub fn decode(data: &[u8]) -> Result<Self> {
-        serde_json::from_slice(data).map_err(|e| TensorError::SqlExec(e.to_string()))
+        serde_json::from_slice(data).map_err(|e| sql_exec_err(e.to_string()))
     }
 
     pub fn merge(&mut self, other: &Bucket) {

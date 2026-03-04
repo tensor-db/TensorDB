@@ -2,57 +2,143 @@
 draft: false
 head: []
 title: Error Reference
-description: TensorDB error types and handling.
+description: TensorDB structured error codes, error types, and handling.
 ---
 
-TensorDB uses the `TensorError` enum for all error conditions.
+TensorDB uses structured error codes for all SQL-related errors, enabling programmatic error handling and providing helpful suggestions.
 
-## Error Types
+## Error Code Format
+
+All error codes follow the pattern `T<NNNN>` where the first digit indicates the category:
+
+| Range | Category | Description |
+|-------|----------|-------------|
+| `T1xxx` | Syntax | SQL parsing and syntax errors |
+| `T2xxx` | Schema | Table, column, index, and view resolution errors |
+| `T3xxx` | Constraint | NOT NULL, UNIQUE, and primary key violations |
+| `T4xxx` | Execution | Runtime errors (timeout, memory, division by zero) |
+| `T6xxx` | Auth | Permission and authentication errors |
+
+## Error Codes
+
+### Syntax Errors (T1xxx)
+
+| Code | Name | Description |
+|------|------|-------------|
+| `T1001` | `SyntaxError` | General SQL syntax error |
+| `T1002` | `UnexpectedToken` | Unexpected token in SQL statement |
+| `T1003` | `UnterminatedString` | String literal not properly closed |
+| `T1004` | `UnknownKeyword` | Unrecognized SQL keyword |
+| `T1005` | `TrailingTokens` | Unexpected tokens after valid statement |
+
+### Schema Errors (T2xxx)
+
+| Code | Name | Description |
+|------|------|-------------|
+| `T2001` | `TableNotFound` | Referenced table does not exist |
+| `T2002` | `ColumnNotFound` | Referenced column does not exist on table |
+| `T2003` | `TableAlreadyExists` | Table already exists (on CREATE TABLE) |
+| `T2004` | `IndexNotFound` | Referenced index does not exist |
+| `T2005` | `IndexAlreadyExists` | Index already exists (on CREATE INDEX) |
+| `T2006` | `ViewNotFound` | Referenced view does not exist |
+| `T2007` | `TypeMismatch` | Type mismatch in expression or assignment |
+
+### Constraint Errors (T3xxx)
+
+| Code | Name | Description |
+|------|------|-------------|
+| `T3001` | `NotNullViolation` | NULL value in NOT NULL column |
+| `T3002` | `UniqueViolation` | Duplicate value in UNIQUE column |
+| `T3003` | `PkViolation` | Primary key constraint violation |
+
+### Execution Errors (T4xxx)
+
+| Code | Name | Description |
+|------|------|-------------|
+| `T4001` | `DivisionByZero` | Division by zero in expression |
+| `T4002` | `InvalidCast` | Invalid type cast |
+| `T4003` | `QueryTimeout` | Query exceeded `QUERY_TIMEOUT` limit |
+| `T4004` | `MemoryLimitExceeded` | Query exceeded `QUERY_MAX_MEMORY` limit |
+| `T4005` | `ExecutionError` | General execution error |
+
+### Auth Errors (T6xxx)
+
+| Code | Name | Description |
+|------|------|-------------|
+| `T6001` | `PermissionDenied` | Insufficient privileges for operation |
+| `T6002` | `AuthRequired` | Authentication required |
+
+## Error Structure
+
+Each SQL error carries:
 
 ```rust
-pub enum TensorError {
-    /// I/O errors (disk, WAL, SSTable)
-    Io(std::io::Error),
-
-    /// Configuration validation failure
-    Config(String),
-
-    /// SQL parsing or execution error
-    Sql(String),
-
-    /// Key not found
-    NotFound(String),
-
-    /// Serialization/deserialization error
-    Serde(String),
-
-    /// Internal engine error
-    Internal(String),
+pub struct SqlError {
+    pub code: ErrorCode,       // Stable numeric error code
+    pub message: String,       // Human-readable error message
+    pub suggestion: Option<String>,  // "Did you mean 'users'?"
+    pub position: Option<usize>,     // Token position in query
 }
+```
+
+## "Did You Mean?" Suggestions
+
+When a table or column name is misspelled, TensorDB uses Levenshtein distance to suggest the closest match:
+
+```sql
+SELECT * FROM usrs;
+-- Error T2001: table or view usrs does not exist
+--   Hint: Did you mean 'users'?
 ```
 
 ## Handling Errors
 
-```rust
-use tensordb::{Database, Config, TensorError};
+### Rust
 
-match db.sql("SELECT * FROM nonexistent", &[]) {
+```rust
+use tensordb::{Database, Config, TensorError, SqlError, ErrorCode};
+
+match db.sql("SELECT * FROM nonexistent") {
     Ok(results) => println!("{:?}", results),
-    Err(TensorError::Sql(msg)) => eprintln!("SQL error: {}", msg),
-    Err(TensorError::Io(e)) => eprintln!("I/O error: {}", e),
+    Err(TensorError::SqlExec(err)) => {
+        eprintln!("Error {}: {}", err.code.code_str(), err.message);
+        if let Some(hint) = &err.suggestion {
+            eprintln!("  Hint: {}", hint);
+        }
+        // Programmatic handling by error code
+        match err.code {
+            ErrorCode::TableNotFound => { /* handle missing table */ }
+            ErrorCode::QueryTimeout => { /* handle timeout */ }
+            _ => { /* other errors */ }
+        }
+    }
     Err(e) => eprintln!("Other error: {}", e),
 }
+```
+
+### Error Display Format
+
+Errors display with their code prefix:
+
+```
+T2001: table or view users does not exist
+  Hint: Did you mean 'users'?
+
+T1001: unexpected trailing tokens
+
+T4003: query timed out after 5023ms (limit: 5000ms)
 ```
 
 ## Common Errors
 
 | Error | Cause | Solution |
 |-------|-------|---------|
-| `Config("memtable_max_bytes must be >= 1024")` | Invalid config | Fix the configuration value |
-| `Sql("table 'x' not found")` | Missing table | CREATE TABLE first |
-| `Sql("parse error")` | SQL syntax error | Check SQL syntax |
-| `Io("Permission denied")` | File permissions | Check data directory permissions |
-| `Io("No space left on device")` | Disk full | Free disk space |
+| `T1001: unexpected trailing tokens` | Extra tokens after SQL statement | Check SQL syntax |
+| `T2001: table X does not exist` | Missing table | `CREATE TABLE` first |
+| `T2002: column X does not exist` | Wrong column name | Check `DESCRIBE table` |
+| `T3001: NOT NULL violation` | NULL in NOT NULL column | Provide a value |
+| `T4003: query timed out` | Slow query | Optimize query or increase `QUERY_TIMEOUT` |
+| `T4004: memory limit exceeded` | Large result set | Add filters or increase `QUERY_MAX_MEMORY` |
 
 ## Result Type
 

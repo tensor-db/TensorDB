@@ -15,7 +15,7 @@ use rustyline::validate::{
 use rustyline::{CompletionType, Config as RustylineConfig, Context, Editor, Helper};
 use tensordb_core::sql::exec::SqlResult;
 use tensordb_core::{
-    AiCorrelationRef, AiInsight, BenchOptions, Config, Database, Result, TensorError,
+    sql_exec_err, AiCorrelationRef, AiInsight, BenchOptions, Config, Database, Result,
 };
 
 #[derive(Parser, Debug)]
@@ -475,7 +475,7 @@ fn run_shell(
         .completion_type(CompletionType::List)
         .build();
     let mut editor: Editor<ReplHelper, DefaultHistory> = Editor::with_config(readline_cfg)
-        .map_err(|e| TensorError::SqlExec(format!("shell initialization failed: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("shell initialization failed: {e}")))?;
 
     let mut helper = ReplHelper::new();
     helper.refresh_catalog(db);
@@ -570,7 +570,7 @@ fn run_shell(
                 break;
             }
             Err(e) => {
-                return Err(TensorError::SqlExec(format!("shell read failure: {e}")));
+                return Err(sql_exec_err(format!("shell read failure: {e}")));
             }
         }
     }

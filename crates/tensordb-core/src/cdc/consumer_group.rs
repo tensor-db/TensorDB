@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::engine::db::Database;
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 /// Key prefix for consumer group metadata.
 const GROUP_PREFIX: &str = "__cdc/group/";
@@ -121,9 +121,8 @@ impl ConsumerGroupManager {
         let key = format!("{}{}", GROUP_PREFIX, group_id);
         match db.get(key.as_bytes(), None, None) {
             Ok(Some(bytes)) => {
-                let group: ConsumerGroup = serde_json::from_slice(&bytes).map_err(|e| {
-                    TensorError::SqlExec(format!("failed to parse consumer group: {e}"))
-                })?;
+                let group: ConsumerGroup = serde_json::from_slice(&bytes)
+                    .map_err(|e| sql_exec_err(format!("failed to parse consumer group: {e}")))?;
                 Ok(group)
             }
             Ok(None) => {
@@ -138,7 +137,7 @@ impl ConsumerGroupManager {
     pub fn save(db: &Database, group: &ConsumerGroup) -> Result<()> {
         let key = group.storage_key();
         let value = serde_json::to_vec(group)
-            .map_err(|e| TensorError::SqlExec(format!("failed to serialize group: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to serialize group: {e}")))?;
         db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         Ok(())
     }

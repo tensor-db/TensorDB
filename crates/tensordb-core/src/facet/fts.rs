@@ -6,7 +6,7 @@
 //! Tokenizer: splits on whitespace, lowercases, strips punctuation.
 //! Supports optional Porter-style stemming (simplified).
 
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 const FTS_PREFIX: &str = "__fts";
 
@@ -80,7 +80,7 @@ pub fn encode_posting_list(pks: &[String]) -> Vec<u8> {
 
 /// Decode a posting list from bytes.
 pub fn decode_posting_list(data: &[u8]) -> Result<Vec<String>> {
-    serde_json::from_slice(data).map_err(|e| TensorError::SqlExec(e.to_string()))
+    serde_json::from_slice(data).map_err(|e| sql_exec_err(e.to_string()))
 }
 
 /// Merge a new PK into a posting list (deduplicating).

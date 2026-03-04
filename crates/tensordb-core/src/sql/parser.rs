@@ -1,4 +1,4 @@
-use crate::error::{Result, TensorError};
+use crate::error::{sql_parse_err, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -322,9 +322,75 @@ pub enum Statement {
         dest: String,
         since_epoch: Option<u64>,
     },
-    /// `RESTORE DATABASE FROM '<path>'`
+    /// `RESTORE DATABASE FROM '<path>'` with optional DRY_RUN
     Restore {
         src: String,
+        dry_run: bool,
+    },
+    // --- Phase 2: Error Quality & Developer Experience ---
+    /// `SET <variable> = <value>`
+    Set {
+        variable: String,
+        value: String,
+    },
+    /// `SUGGEST INDEX FOR '<query>'`
+    SuggestIndex {
+        query: String,
+    },
+    /// `VERIFY BACKUP '<path>'`
+    VerifyBackup {
+        path: String,
+    },
+    /// `VACUUM` or `VACUUM <table>`
+    Vacuum {
+        table: Option<String>,
+    },
+    // --- Phase 2: SHOW extensions ---
+    ShowWalStatus,
+    ShowAuditLog {
+        limit: Option<u64>,
+    },
+    ShowPlanGuides,
+    // --- Phase 3: Security & Audit ---
+    /// `CREATE POLICY <name> ON <table> FOR <op> [TO <role>, ...] USING (<expr>)`
+    CreatePolicy {
+        name: String,
+        table: String,
+        operation: String,
+        using_expr: String,
+        roles: Vec<String>,
+    },
+    /// `DROP POLICY <name> ON <table>`
+    DropPolicy {
+        name: String,
+        table: String,
+    },
+    /// `FORGET KEY '<key>' FROM <table>`
+    ForgetKey {
+        table: String,
+        key: String,
+    },
+    // --- Phase 4: Operational Maturity ---
+    /// `ALTER TABLE <t> DROP COLUMN <c>`
+    AlterTableDropColumn {
+        table: String,
+        column: String,
+    },
+    /// `ALTER TABLE <t> RENAME COLUMN <old> TO <new>`
+    AlterTableRenameColumn {
+        table: String,
+        old_name: String,
+        new_name: String,
+    },
+    /// `CREATE PLAN GUIDE '<name>' FOR '<sql>' USING '<hints>'`
+    CreatePlanGuide {
+        name: String,
+        sql_pattern: String,
+        hints: String,
+    },
+    /// `DROP PLAN GUIDE '<name>'`
+    DropPlanGuide {
+        name: String,
     },
 }
 
@@ -448,9 +514,7 @@ pub fn parse_sql(input: &str) -> Result<Statement> {
     // Check for set operations after the first statement
     let stmt = p.try_parse_set_op(stmt)?;
     if p.i != p.toks.len() {
-        return Err(TensorError::SqlParse(
-            "unexpected trailing tokens".to_string(),
-        ));
+        return Err(sql_parse_err("unexpected trailing tokens".to_string()));
     }
     Ok(stmt)
 }
@@ -492,9 +556,7 @@ pub fn split_sql_statements(input: &str) -> Result<Vec<String>> {
     }
 
     if in_string {
-        return Err(TensorError::SqlParse(
-            "unterminated string literal".to_string(),
-        ));
+        return Err(sql_parse_err("unterminated string literal".to_string()));
     }
 
     let tail = input[start..].trim();
@@ -503,7 +565,7 @@ pub fn split_sql_statements(input: &str) -> Result<Vec<String>> {
     }
 
     if out.is_empty() {
-        return Err(TensorError::SqlParse("no SQL statements found".to_string()));
+        return Err(sql_parse_err("no SQL statements found"));
     }
 
     Ok(out)
@@ -629,11 +691,52 @@ impl Parser {
             }
             self.expect_kw("FROM")?;
             let src = self.expect_string()?;
-            return Ok(Statement::Restore { src });
+            let dry_run = if self.peek_kw("DRY_RUN") {
+                self.expect_kw("DRY_RUN")?;
+                true
+            } else {
+                false
+            };
+            return Ok(Statement::Restore { src, dry_run });
         }
-        Err(TensorError::SqlParse(
-            "unsupported SQL statement".to_string(),
-        ))
+        if self.peek_kw("SET") {
+            self.expect_kw("SET")?;
+            let variable = self.expect_ident()?;
+            self.expect_symbol('=')?;
+            let value = self.parse_set_value()?;
+            return Ok(Statement::Set { variable, value });
+        }
+        if self.peek_kw("SUGGEST") {
+            self.expect_kw("SUGGEST")?;
+            self.expect_kw("INDEX")?;
+            self.expect_kw("FOR")?;
+            let query = self.expect_string()?;
+            return Ok(Statement::SuggestIndex { query });
+        }
+        if self.peek_kw("VERIFY") {
+            self.expect_kw("VERIFY")?;
+            self.expect_kw("BACKUP")?;
+            let path = self.expect_string()?;
+            return Ok(Statement::VerifyBackup { path });
+        }
+        if self.peek_kw("VACUUM") {
+            self.expect_kw("VACUUM")?;
+            let table = if self.i < self.toks.len() {
+                self.try_ident()
+            } else {
+                None
+            };
+            return Ok(Statement::Vacuum { table });
+        }
+        if self.peek_kw("FORGET") {
+            self.expect_kw("FORGET")?;
+            self.expect_kw("KEY")?;
+            let key = self.expect_string()?;
+            self.expect_kw("FROM")?;
+            let table = self.expect_ident()?;
+            return Ok(Statement::ForgetKey { table, key });
+        }
+        Err(sql_parse_err("unsupported SQL statement"))
     }
 
     fn parse_create(&mut self) -> Result<Statement> {
@@ -660,9 +763,14 @@ impl Parser {
         if self.peek_kw("INDEX") {
             return self.parse_create_index_after_create(false);
         }
-        Err(TensorError::SqlParse(
-            "expected TABLE, TIMESERIES TABLE, VIEW, VECTOR INDEX, FULLTEXT INDEX, UNIQUE INDEX, or INDEX after CREATE"
-                .to_string(),
+        if self.peek_kw("POLICY") {
+            return self.parse_create_policy();
+        }
+        if self.peek_kw("PLAN") {
+            return self.parse_create_plan_guide();
+        }
+        Err(sql_parse_err(
+            "expected TABLE, VIEW, INDEX, POLICY, or PLAN GUIDE after CREATE",
         ))
     }
 
@@ -688,9 +796,8 @@ impl Parser {
         loop {
             let col_name = self.expect_ident()?;
             let type_name_str = self.expect_ident()?;
-            let mut type_name = SqlType::from_str_name(&type_name_str).ok_or_else(|| {
-                TensorError::SqlParse(format!("unknown column type: {type_name_str}"))
-            })?;
+            let mut type_name = SqlType::from_str_name(&type_name_str)
+                .ok_or_else(|| sql_parse_err(format!("unknown column type: {type_name_str}")))?;
 
             // Handle DECIMAL(precision, scale) / NUMERIC(p,s) / VECTOR(dims) / VARCHAR(n) syntax
             if matches!(type_name, SqlType::Decimal { .. }) && self.peek_symbol('(') {
@@ -708,9 +815,7 @@ impl Parser {
                 self.expect_symbol('(')?;
                 let dims = self.expect_number_u64()? as u16;
                 if dims == 0 {
-                    return Err(TensorError::SqlParse(
-                        "VECTOR dimensions must be > 0".to_string(),
-                    ));
+                    return Err(sql_parse_err("VECTOR dimensions must be > 0".to_string()));
                 }
                 self.expect_symbol(')')?;
                 type_name = SqlType::Vector { dims };
@@ -776,7 +881,7 @@ impl Parser {
             ..
         } = select
         else {
-            return Err(TensorError::SqlParse(
+            return Err(sql_parse_err(
                 "expected SELECT after CREATE VIEW ... AS".to_string(),
             ));
         };
@@ -784,7 +889,7 @@ impl Parser {
         let table = match &from {
             TableRef::Named { name: t, .. } => t.clone(),
             _ => {
-                return Err(TensorError::SqlParse(
+                return Err(sql_parse_err(
                     "CREATE VIEW requires simple table reference".to_string(),
                 ))
             }
@@ -794,22 +899,21 @@ impl Parser {
         let is_doc_projection = items.len() == 1
             && matches!(&items[0], SelectItem::Expr { expr: Expr::Column(c), alias: None } if c.eq_ignore_ascii_case("doc"));
         if !is_doc_projection {
-            return Err(TensorError::SqlParse(
+            return Err(sql_parse_err(
                 "CREATE VIEW requires SELECT doc projection".to_string(),
             ));
         }
         if !joins.is_empty() {
-            return Err(TensorError::SqlParse(
+            return Err(sql_parse_err(
                 "CREATE VIEW does not support JOIN".to_string(),
             ));
         }
 
-        let pk = extract_pk_eq_literal(filter.as_ref()).ok_or_else(|| {
-            TensorError::SqlParse("CREATE VIEW requires WHERE pk='...'".to_string())
-        })?;
+        let pk = extract_pk_eq_literal(filter.as_ref())
+            .ok_or_else(|| sql_parse_err("CREATE VIEW requires WHERE pk='...'"))?;
 
         if group_by.is_some() || order_by.is_some() || limit.is_some() {
-            return Err(TensorError::SqlParse(
+            return Err(sql_parse_err(
                 "CREATE VIEW does not support GROUP BY, ORDER BY, or LIMIT".to_string(),
             ));
         }
@@ -863,7 +967,7 @@ impl Parser {
                 "HNSW" => VectorIndexType::Hnsw,
                 "IVF_PQ" => VectorIndexType::IvfPq,
                 _ => {
-                    return Err(TensorError::SqlParse(format!(
+                    return Err(sql_parse_err(format!(
                         "unknown vector index type: {type_name}, expected HNSW or IVF_PQ"
                     )))
                 }
@@ -924,9 +1028,8 @@ impl Parser {
         loop {
             let col_name = self.expect_ident()?;
             let type_name_str = self.expect_ident()?;
-            let type_name = SqlType::from_str_name(&type_name_str).ok_or_else(|| {
-                TensorError::SqlParse(format!("unknown column type: {type_name_str}"))
-            })?;
+            let type_name = SqlType::from_str_name(&type_name_str)
+                .ok_or_else(|| sql_parse_err(format!("unknown column type: {type_name_str}")))?;
 
             let mut primary_key = false;
             let mut not_null = false;
@@ -1010,15 +1113,38 @@ impl Parser {
         self.expect_kw("ALTER")?;
         self.expect_kw("TABLE")?;
         let table = self.expect_ident()?;
-        self.expect_kw("ADD")?;
-        self.expect_kw("COLUMN")?;
-        let column = self.expect_ident()?;
-        let column_type = self.expect_ident()?;
-        Ok(Statement::AlterTableAddColumn {
-            table,
-            column,
-            column_type,
-        })
+        if self.peek_kw("ADD") {
+            self.expect_kw("ADD")?;
+            self.expect_kw("COLUMN")?;
+            let column = self.expect_ident()?;
+            let column_type = self.expect_ident()?;
+            return Ok(Statement::AlterTableAddColumn {
+                table,
+                column,
+                column_type,
+            });
+        }
+        if self.peek_kw("DROP") {
+            self.expect_kw("DROP")?;
+            self.expect_kw("COLUMN")?;
+            let column = self.expect_ident()?;
+            return Ok(Statement::AlterTableDropColumn { table, column });
+        }
+        if self.peek_kw("RENAME") {
+            self.expect_kw("RENAME")?;
+            self.expect_kw("COLUMN")?;
+            let old_name = self.expect_ident()?;
+            self.expect_kw("TO")?;
+            let new_name = self.expect_ident()?;
+            return Ok(Statement::AlterTableRenameColumn {
+                table,
+                old_name,
+                new_name,
+            });
+        }
+        Err(sql_parse_err(
+            "expected ADD COLUMN, DROP COLUMN, or RENAME COLUMN after ALTER TABLE",
+        ))
     }
 
     fn parse_insert(&mut self) -> Result<Statement> {
@@ -1061,7 +1187,7 @@ impl Parser {
         self.expect_symbol(')')?;
 
         if col_names.len() != values.len() {
-            return Err(TensorError::SqlParse(
+            return Err(sql_parse_err(
                 "column count does not match value count".to_string(),
             ));
         }
@@ -1230,7 +1356,7 @@ impl Parser {
                 // AS OF EPOCH <n> — point-in-time recovery by epoch
                 if self.peek_kw("EPOCH") {
                     if as_of_epoch.is_some() {
-                        return Err(TensorError::SqlParse(
+                        return Err(sql_parse_err(
                             "AS OF EPOCH specified more than once".to_string(),
                         ));
                     }
@@ -1238,9 +1364,7 @@ impl Parser {
                     as_of_epoch = Some(self.expect_number_u64()?);
                 } else {
                     if as_of.is_some() {
-                        return Err(TensorError::SqlParse(
-                            "AS OF specified more than once".to_string(),
-                        ));
+                        return Err(sql_parse_err("AS OF specified more than once".to_string()));
                     }
                     as_of = Some(self.expect_number_u64()?);
                 }
@@ -1249,7 +1373,7 @@ impl Parser {
 
             if self.peek_kw("VALID") {
                 if valid_at.is_some() {
-                    return Err(TensorError::SqlParse(
+                    return Err(sql_parse_err(
                         "VALID AT specified more than once".to_string(),
                     ));
                 }
@@ -1269,7 +1393,7 @@ impl Parser {
 
             if self.peek_kw("GROUP") {
                 if group_by.is_some() {
-                    return Err(TensorError::SqlParse(
+                    return Err(sql_parse_err(
                         "GROUP BY specified more than once".to_string(),
                     ));
                 }
@@ -1287,14 +1411,10 @@ impl Parser {
 
             if self.peek_kw("HAVING") {
                 if having.is_some() {
-                    return Err(TensorError::SqlParse(
-                        "HAVING specified more than once".to_string(),
-                    ));
+                    return Err(sql_parse_err("HAVING specified more than once".to_string()));
                 }
                 if group_by.is_none() {
-                    return Err(TensorError::SqlParse(
-                        "HAVING requires GROUP BY".to_string(),
-                    ));
+                    return Err(sql_parse_err("HAVING requires GROUP BY".to_string()));
                 }
                 self.expect_kw("HAVING")?;
                 having = Some(self.parse_expr()?);
@@ -1303,7 +1423,7 @@ impl Parser {
 
             if self.peek_kw("ORDER") {
                 if order_by.is_some() {
-                    return Err(TensorError::SqlParse(
+                    return Err(sql_parse_err(
                         "ORDER BY specified more than once".to_string(),
                     ));
                 }
@@ -1334,9 +1454,7 @@ impl Parser {
 
             if self.peek_kw("LIMIT") {
                 if limit.is_some() {
-                    return Err(TensorError::SqlParse(
-                        "LIMIT specified more than once".to_string(),
-                    ));
+                    return Err(sql_parse_err("LIMIT specified more than once".to_string()));
                 }
                 self.expect_kw("LIMIT")?;
                 limit = Some(self.expect_number_u64()?);
@@ -1628,7 +1746,7 @@ impl Parser {
                 self.expect_kw("ALL")?;
                 return Ok(TemporalClause::SystemTimeAll);
             }
-            return Err(TensorError::SqlParse(
+            return Err(sql_parse_err(
                 "expected AS OF, FROM ... TO, BETWEEN ... AND, or ALL after SYSTEM_TIME"
                     .to_string(),
             ));
@@ -1657,13 +1775,13 @@ impl Parser {
                 let t2 = self.expect_number_u64()?;
                 return Ok(TemporalClause::ApplicationTimeBetween(t1, t2));
             }
-            return Err(TensorError::SqlParse(
+            return Err(sql_parse_err(
                 "expected AS OF, FROM ... TO, or BETWEEN ... AND after APPLICATION_TIME"
                     .to_string(),
             ));
         }
 
-        Err(TensorError::SqlParse(
+        Err(sql_parse_err(
             "expected SYSTEM_TIME or APPLICATION_TIME after FOR".to_string(),
         ))
     }
@@ -2127,7 +2245,7 @@ impl Parser {
             return Ok(Expr::Column(ident));
         }
 
-        Err(TensorError::SqlParse(format!(
+        Err(sql_parse_err(format!(
             "unexpected token in expression at position {}",
             self.i
         )))
@@ -2191,9 +2309,7 @@ impl Parser {
                 self.i += 1;
                 Ok(())
             }
-            _ => Err(TensorError::SqlParse(
-                "expected comparison operator".to_string(),
-            )),
+            _ => Err(sql_parse_err("expected comparison operator".to_string())),
         }
     }
 
@@ -2226,9 +2342,27 @@ impl Parser {
             self.expect_kw("STATUS")?;
             return Ok(Statement::ShowCompactionStatus);
         }
-        Err(TensorError::SqlParse(
-            "expected TABLES, STATS, SLOW QUERIES, ACTIVE QUERIES, STORAGE, or COMPACTION STATUS after SHOW".to_string(),
-        ))
+        if self.peek_kw("WAL") {
+            self.expect_kw("WAL")?;
+            self.expect_kw("STATUS")?;
+            return Ok(Statement::ShowWalStatus);
+        }
+        if self.peek_kw("AUDIT") {
+            self.expect_kw("AUDIT")?;
+            self.expect_kw("LOG")?;
+            let limit = if self.i < self.toks.len() {
+                self.try_number_u64()
+            } else {
+                None
+            };
+            return Ok(Statement::ShowAuditLog { limit });
+        }
+        if self.peek_kw("PLAN") {
+            self.expect_kw("PLAN")?;
+            self.expect_kw("GUIDES")?;
+            return Ok(Statement::ShowPlanGuides);
+        }
+        Err(sql_parse_err("expected TABLES, STATS, SLOW QUERIES, ACTIVE QUERIES, STORAGE, COMPACTION STATUS, WAL STATUS, AUDIT LOG, or PLAN GUIDES after SHOW"))
     }
 
     fn parse_describe(&mut self) -> Result<Statement> {
@@ -2272,8 +2406,21 @@ impl Parser {
             let table = self.expect_ident()?;
             return Ok(Statement::DropIndex { index, table });
         }
-        Err(TensorError::SqlParse(
-            "expected TABLE, VIEW, VECTOR INDEX, FULLTEXT INDEX, or INDEX after DROP".to_string(),
+        if self.peek_kw("POLICY") {
+            self.expect_kw("POLICY")?;
+            let name = self.expect_ident()?;
+            self.expect_kw("ON")?;
+            let table = self.expect_ident()?;
+            return Ok(Statement::DropPolicy { name, table });
+        }
+        if self.peek_kw("PLAN") {
+            self.expect_kw("PLAN")?;
+            self.expect_kw("GUIDE")?;
+            let name = self.expect_string()?;
+            return Ok(Statement::DropPlanGuide { name });
+        }
+        Err(sql_parse_err(
+            "expected TABLE, VIEW, INDEX, POLICY, or PLAN GUIDE after DROP",
         ))
     }
 
@@ -2300,7 +2447,7 @@ impl Parser {
                 format,
             })
         } else {
-            Err(TensorError::SqlParse(
+            Err(sql_parse_err(
                 "expected TO or FROM after COPY table".to_string(),
             ))
         }
@@ -2398,7 +2545,7 @@ impl Parser {
                 self.i += 1;
                 Ok(())
             }
-            _ => Err(TensorError::SqlParse(format!("expected keyword {kw}"))),
+            _ => Err(sql_parse_err(format!("expected keyword {kw}"))),
         }
     }
 
@@ -2408,7 +2555,7 @@ impl Parser {
                 self.i += 1;
                 Ok(s.clone())
             }
-            _ => Err(TensorError::SqlParse("expected identifier".to_string())),
+            _ => Err(sql_parse_err("expected identifier")),
         }
     }
 
@@ -2417,7 +2564,7 @@ impl Parser {
         if got.eq_ignore_ascii_case(expected) {
             Ok(())
         } else {
-            Err(TensorError::SqlParse(format!(
+            Err(sql_parse_err(format!(
                 "expected identifier {expected}, got {got}"
             )))
         }
@@ -2429,7 +2576,7 @@ impl Parser {
                 self.i += 1;
                 Ok(s.clone())
             }
-            _ => Err(TensorError::SqlParse("expected string literal".to_string())),
+            _ => Err(sql_parse_err("expected string literal")),
         }
     }
 
@@ -2439,7 +2586,7 @@ impl Parser {
                 self.i += 1;
                 Ok(())
             }
-            _ => Err(TensorError::SqlParse(format!("expected symbol {symbol}"))),
+            _ => Err(sql_parse_err(format!("expected symbol {symbol}"))),
         }
     }
 
@@ -2448,13 +2595,11 @@ impl Parser {
             Some(Token::Number(s)) => {
                 let n = s
                     .parse::<u64>()
-                    .map_err(|_| TensorError::SqlParse("invalid number".to_string()))?;
+                    .map_err(|_| sql_parse_err("invalid number"))?;
                 self.i += 1;
                 Ok(n)
             }
-            _ => Err(TensorError::SqlParse(
-                "expected numeric literal".to_string(),
-            )),
+            _ => Err(sql_parse_err("expected numeric literal".to_string())),
         }
     }
 
@@ -2463,15 +2608,143 @@ impl Parser {
             Some(Token::Number(s)) => {
                 let n = s
                     .parse::<f64>()
-                    .map_err(|_| TensorError::SqlParse("invalid number".to_string()))?;
+                    .map_err(|_| sql_parse_err("invalid number"))?;
                 self.i += 1;
                 Ok(n)
             }
-            _ => Err(TensorError::SqlParse(
-                "expected numeric literal".to_string(),
-            )),
+            _ => Err(sql_parse_err("expected numeric literal")),
         }
     }
+
+    /// Try to consume an identifier, returning None if not an ident.
+    fn try_ident(&mut self) -> Option<String> {
+        match self.toks.get(self.i) {
+            Some(Token::Ident(s)) => {
+                let s = s.clone();
+                self.i += 1;
+                Some(s)
+            }
+            _ => None,
+        }
+    }
+
+    /// Try to consume a number, returning None if not a number.
+    fn try_number_u64(&mut self) -> Option<u64> {
+        match self.toks.get(self.i) {
+            Some(Token::Number(s)) => {
+                if let Ok(n) = s.parse::<u64>() {
+                    self.i += 1;
+                    Some(n)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Parse a SET value: could be a string literal, number, or identifier (ON/OFF etc.).
+    fn parse_set_value(&mut self) -> Result<String> {
+        match self.toks.get(self.i) {
+            Some(Token::StringLit(s)) => {
+                let s = s.clone();
+                self.i += 1;
+                Ok(s)
+            }
+            Some(Token::Number(s)) => {
+                let s = s.clone();
+                self.i += 1;
+                Ok(s)
+            }
+            Some(Token::Ident(s)) => {
+                let s = s.clone();
+                self.i += 1;
+                Ok(s)
+            }
+            _ => Err(sql_parse_err("expected value after =")),
+        }
+    }
+
+    /// Parse: CREATE POLICY <name> ON <table> FOR <op> [TO <role>, ...] USING (<expr>)
+    fn parse_create_policy(&mut self) -> Result<Statement> {
+        self.expect_kw("POLICY")?;
+        let name = self.expect_ident()?;
+        self.expect_kw("ON")?;
+        let table = self.expect_ident()?;
+        self.expect_kw("FOR")?;
+        let operation = self.expect_ident()?; // SELECT, INSERT, UPDATE, DELETE, ALL
+        let mut roles = Vec::new();
+        if self.peek_kw("TO") {
+            self.expect_kw("TO")?;
+            roles.push(self.expect_ident()?);
+            while self.peek_symbol(',') {
+                self.expect_symbol(',')?;
+                roles.push(self.expect_ident()?);
+            }
+        }
+        self.expect_kw("USING")?;
+        self.expect_symbol('(')?;
+        // Collect all tokens until matching ')' as the expression string
+        let start = self.i;
+        let mut depth = 1;
+        while self.i < self.toks.len() && depth > 0 {
+            match &self.toks[self.i] {
+                Token::Symbol('(') => depth += 1,
+                Token::Symbol(')') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            self.i += 1;
+        }
+        let expr_tokens = &self.toks[start..self.i];
+        let using_expr = tokens_to_string(expr_tokens);
+        self.expect_symbol(')')?;
+        Ok(Statement::CreatePolicy {
+            name,
+            table,
+            operation,
+            using_expr,
+            roles,
+        })
+    }
+
+    /// Parse: CREATE PLAN GUIDE '<name>' FOR '<sql>' USING '<hints>'
+    fn parse_create_plan_guide(&mut self) -> Result<Statement> {
+        self.expect_kw("PLAN")?;
+        self.expect_kw("GUIDE")?;
+        let name = self.expect_string()?;
+        self.expect_kw("FOR")?;
+        let sql_pattern = self.expect_string()?;
+        self.expect_kw("USING")?;
+        let hints = self.expect_string()?;
+        Ok(Statement::CreatePlanGuide {
+            name,
+            sql_pattern,
+            hints,
+        })
+    }
+}
+
+/// Reconstruct a SQL expression string from tokens.
+fn tokens_to_string(toks: &[Token]) -> String {
+    let mut parts = Vec::new();
+    for tok in toks {
+        match tok {
+            Token::Ident(s) => parts.push(s.clone()),
+            Token::Number(s) => parts.push(s.clone()),
+            Token::StringLit(s) => parts.push(format!("'{s}'")),
+            Token::Symbol(c) => parts.push(c.to_string()),
+            Token::NotEq => parts.push("!=".to_string()),
+            Token::LtEq => parts.push("<=".to_string()),
+            Token::GtEq => parts.push(">=".to_string()),
+            Token::VectorDistance => parts.push("<->".to_string()),
+        }
+    }
+    parts.join(" ")
 }
 
 pub fn extract_pk_eq_literal(expr: Option<&Expr>) -> Option<String> {
@@ -2716,7 +2989,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
             continue;
         }
 
-        return Err(TensorError::SqlParse(format!("unexpected character {c}")));
+        return Err(sql_parse_err(format!("unexpected character {c}")));
     }
 
     Ok(out)
@@ -2839,7 +3112,8 @@ mod tests {
         assert_eq!(
             stmt,
             Statement::Restore {
-                src: "/tmp/backup".to_string()
+                src: "/tmp/backup".to_string(),
+                dry_run: false,
             }
         );
     }

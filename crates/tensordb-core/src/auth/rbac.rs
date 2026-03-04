@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::engine::db::Database;
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 /// Key prefix for user records.
 const USER_PREFIX: &str = "__auth/user/";
@@ -180,9 +180,7 @@ impl UserManager {
     ) -> Result<UserRecord> {
         let key = format!("{}{}", USER_PREFIX, username);
         if db.get(key.as_bytes(), None, None)?.is_some() {
-            return Err(TensorError::SqlExec(format!(
-                "user already exists: {username}"
-            )));
+            return Err(sql_exec_err(format!("user already exists: {username}")));
         }
 
         let salt = generate_salt();
@@ -199,7 +197,7 @@ impl UserManager {
         };
 
         let value = serde_json::to_vec(&user)
-            .map_err(|e| TensorError::SqlExec(format!("failed to serialize user: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to serialize user: {e}")))?;
         db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         Ok(user)
     }
@@ -214,11 +212,9 @@ impl UserManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let user: UserRecord = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse user: {e}")))?;
                 if !user.enabled {
-                    return Err(TensorError::SqlExec(format!(
-                        "user is disabled: {username}"
-                    )));
+                    return Err(sql_exec_err(format!("user is disabled: {username}")));
                 }
                 if verify_password(password, &user.password_hash) {
                     Ok(Some(user))
@@ -236,7 +232,7 @@ impl UserManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let user: UserRecord = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse user: {e}")))?;
                 Ok(Some(user))
             }
             None => Ok(None),
@@ -261,15 +257,15 @@ impl UserManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let mut user: UserRecord = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse user: {e}")))?;
                 let salt = generate_salt();
                 user.password_hash = hash_password(new_password, &salt);
                 let value = serde_json::to_vec(&user)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to serialize user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to serialize user: {e}")))?;
                 db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
                 Ok(())
             }
-            None => Err(TensorError::SqlExec(format!("user not found: {username}"))),
+            None => Err(sql_exec_err(format!("user not found: {username}"))),
         }
     }
 
@@ -279,16 +275,16 @@ impl UserManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let mut user: UserRecord = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse user: {e}")))?;
                 if !user.roles.contains(&role.to_string()) {
                     user.roles.push(role.to_string());
                 }
                 let value = serde_json::to_vec(&user)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to serialize user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to serialize user: {e}")))?;
                 db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
                 Ok(())
             }
-            None => Err(TensorError::SqlExec(format!("user not found: {username}"))),
+            None => Err(sql_exec_err(format!("user not found: {username}"))),
         }
     }
 
@@ -298,14 +294,14 @@ impl UserManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let mut user: UserRecord = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse user: {e}")))?;
                 user.roles.retain(|r| r != role);
                 let value = serde_json::to_vec(&user)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to serialize user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to serialize user: {e}")))?;
                 db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
                 Ok(())
             }
-            None => Err(TensorError::SqlExec(format!("user not found: {username}"))),
+            None => Err(sql_exec_err(format!("user not found: {username}"))),
         }
     }
 
@@ -315,14 +311,14 @@ impl UserManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let mut user: UserRecord = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse user: {e}")))?;
                 user.direct_permissions.insert(permission);
                 let value = serde_json::to_vec(&user)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to serialize user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to serialize user: {e}")))?;
                 db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
                 Ok(())
             }
-            None => Err(TensorError::SqlExec(format!("user not found: {username}"))),
+            None => Err(sql_exec_err(format!("user not found: {username}"))),
         }
     }
 
@@ -332,14 +328,14 @@ impl UserManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let mut user: UserRecord = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse user: {e}")))?;
                 user.enabled = false;
                 let value = serde_json::to_vec(&user)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to serialize user: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to serialize user: {e}")))?;
                 db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
                 Ok(())
             }
-            None => Err(TensorError::SqlExec(format!("user not found: {username}"))),
+            None => Err(sql_exec_err(format!("user not found: {username}"))),
         }
     }
 
@@ -390,12 +386,12 @@ impl RoleManager {
     pub fn create_role(db: &Database, name: &str) -> Result<Role> {
         let key = format!("{}{}", ROLE_PREFIX, name);
         if db.get(key.as_bytes(), None, None)?.is_some() {
-            return Err(TensorError::SqlExec(format!("role already exists: {name}")));
+            return Err(sql_exec_err(format!("role already exists: {name}")));
         }
 
         let role = Role::new(name);
         let value = serde_json::to_vec(&role)
-            .map_err(|e| TensorError::SqlExec(format!("failed to serialize role: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to serialize role: {e}")))?;
         db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         Ok(role)
     }
@@ -406,7 +402,7 @@ impl RoleManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let role: Role = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse role: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse role: {e}")))?;
                 Ok(Some(role))
             }
             None => Ok(None),
@@ -431,14 +427,14 @@ impl RoleManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let mut role: Role = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse role: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse role: {e}")))?;
                 role.grant(permission);
                 let value = serde_json::to_vec(&role)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to serialize role: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to serialize role: {e}")))?;
                 db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
                 Ok(())
             }
-            None => Err(TensorError::SqlExec(format!("role not found: {role_name}"))),
+            None => Err(sql_exec_err(format!("role not found: {role_name}"))),
         }
     }
 
@@ -448,14 +444,14 @@ impl RoleManager {
         match db.get(key.as_bytes(), None, None)? {
             Some(bytes) => {
                 let mut role: Role = serde_json::from_slice(&bytes)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to parse role: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to parse role: {e}")))?;
                 role.revoke(permission);
                 let value = serde_json::to_vec(&role)
-                    .map_err(|e| TensorError::SqlExec(format!("failed to serialize role: {e}")))?;
+                    .map_err(|e| sql_exec_err(format!("failed to serialize role: {e}")))?;
                 db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
                 Ok(())
             }
-            None => Err(TensorError::SqlExec(format!("role not found: {role_name}"))),
+            None => Err(sql_exec_err(format!("role not found: {role_name}"))),
         }
     }
 
@@ -480,7 +476,7 @@ impl RoleManager {
             admin.grant(Permission::new(Privilege::Admin, None));
             let key = format!("{}admin", ROLE_PREFIX);
             let value = serde_json::to_vec(&admin)
-                .map_err(|e| TensorError::SqlExec(format!("failed to serialize role: {e}")))?;
+                .map_err(|e| sql_exec_err(format!("failed to serialize role: {e}")))?;
             db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         }
 
@@ -490,7 +486,7 @@ impl RoleManager {
             reader.grant(Permission::new(Privilege::Select, None));
             let key = format!("{}reader", ROLE_PREFIX);
             let value = serde_json::to_vec(&reader)
-                .map_err(|e| TensorError::SqlExec(format!("failed to serialize role: {e}")))?;
+                .map_err(|e| sql_exec_err(format!("failed to serialize role: {e}")))?;
             db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         }
 
@@ -502,7 +498,7 @@ impl RoleManager {
             writer.grant(Permission::new(Privilege::Update, None));
             let key = format!("{}writer", ROLE_PREFIX);
             let value = serde_json::to_vec(&writer)
-                .map_err(|e| TensorError::SqlExec(format!("failed to serialize role: {e}")))?;
+                .map_err(|e| sql_exec_err(format!("failed to serialize role: {e}")))?;
             db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
         }
 

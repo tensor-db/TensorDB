@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::engine::db::Database;
 use crate::engine::shard::ChangeEvent;
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 /// Key prefix for durable cursor storage.
 const CURSOR_PREFIX: &str = "__cdc/cursor/";
@@ -144,7 +144,7 @@ fn load_cursor_position(db: &Database, consumer_id: &str) -> Result<Option<Curso
     match db.get(key.as_bytes(), None, None) {
         Ok(Some(bytes)) => {
             let pos: CursorPosition = serde_json::from_slice(&bytes)
-                .map_err(|e| TensorError::SqlExec(format!("failed to parse cursor: {e}")))?;
+                .map_err(|e| sql_exec_err(format!("failed to parse cursor: {e}")))?;
             Ok(Some(pos))
         }
         Ok(None) => Ok(None),
@@ -156,7 +156,7 @@ fn load_cursor_position(db: &Database, consumer_id: &str) -> Result<Option<Curso
 fn save_cursor_position(db: &Database, pos: &CursorPosition) -> Result<()> {
     let key = pos.storage_key();
     let value = serde_json::to_vec(pos)
-        .map_err(|e| TensorError::SqlExec(format!("failed to serialize cursor: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("failed to serialize cursor: {e}")))?;
     db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
     Ok(())
 }

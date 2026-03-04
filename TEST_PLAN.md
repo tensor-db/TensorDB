@@ -10,7 +10,7 @@
 
 ## Current Test Coverage
 
-**224+ integration tests** across **30 test suites** in `tests/`:
+**270+ integration tests** across **45 test suites** in `tests/`:
 
 | Suite | Coverage |
 |-------|----------|
@@ -44,6 +44,21 @@
 | `wal_recovery.rs` | WAL replay and state recovery after crash |
 | `window_functions.rs` | Window functions: ROW_NUMBER, RANK, DENSE_RANK, LEAD, LAG |
 | `write_batch.rs` | Atomic multi-key write batches |
+| `error_codes.rs` | Structured error codes (T1xxx–T6xxx), code categories, display format |
+| `suggestions.rs` | Levenshtein distance, fuzzy matching, "Did you mean?" suggestions |
+| `strict_mode.rs` | SET statement, strict mode, query timeout, query max memory |
+| `vacuum.rs` | VACUUM tombstone cleanup, VACUUM ALL |
+| `verify_backup.rs` | VERIFY BACKUP validation, nonexistent path handling |
+| `suggest_index.rs` | SUGGEST INDEX FOR query analysis, indexed vs unindexed columns |
+| `audit_log.rs` | Audit log recording, SHOW AUDIT LOG, DDL event tracking |
+| `row_level_security.rs` | CREATE/DROP POLICY, duplicate detection, role-based policies |
+| `gdpr_erasure.rs` | FORGET KEY erasure, audit log integration |
+| `resource_limits.rs` | SET QUERY_TIMEOUT, SET QUERY_MAX_MEMORY, timeout reset |
+| `online_ddl.rs` | ALTER TABLE DROP/RENAME COLUMN, PK protection |
+| `plan_stability.rs` | CREATE/DROP PLAN GUIDE, SHOW PLAN GUIDES, duplicate detection |
+| `backup_dry_run.rs` | RESTORE DRY_RUN validation, invalid path handling |
+| `compaction_scheduling.rs` | SET COMPACTION_WINDOW, format validation |
+| `wal_management.rs` | SHOW WAL STATUS, per-shard WAL info |
 
 ## Acceptance Gates
 
@@ -51,7 +66,7 @@ A build is acceptable when all of the following pass:
 
 1. `cargo fmt --all --check` — no formatting issues
 2. `cargo clippy --workspace --all-targets -- -D warnings` — no lint warnings
-3. `cargo test --workspace --all-targets` — all 224+ tests pass
+3. `cargo test --workspace --all-targets` — all 270+ tests pass
 4. `cargo test --workspace --all-targets --features native` — passes with C++ acceleration
 5. `./scripts/ai_overhead_gate.sh` — AI overhead within regression thresholds
 6. WAL fault-injection tests pass (CRC mismatch + torn tail recovery)
@@ -90,15 +105,16 @@ A build is acceptable when all of the following pass:
 
 ### D) SQL Engine
 
-- **DDL:** CREATE/DROP TABLE, VIEW, INDEX, FULLTEXT INDEX, TIMESERIES TABLE, ALTER TABLE ADD COLUMN
-- **DML:** INSERT, INSERT...RETURNING, UPDATE, DELETE
+- **DDL:** CREATE/DROP TABLE, VIEW, INDEX, FULLTEXT INDEX, TIMESERIES TABLE, ALTER TABLE ADD/DROP/RENAME COLUMN
+- **DML:** INSERT, INSERT...RETURNING, UPDATE, DELETE, VACUUM, FORGET KEY
 - **Queries:** SELECT with WHERE, ORDER BY, LIMIT, JOIN (inner/left/right/cross), GROUP BY, HAVING, subqueries, CTEs, UNION/INTERSECT/EXCEPT, window functions
 - **Expressions:** Arithmetic, comparisons, CASE, CAST, LIKE/ILIKE, IS NULL, BETWEEN, IN
 - **Functions:** All 50+ scalar, aggregate, window, time-series, and FTS functions
 - **Temporal:** AS OF, VALID AT, all SQL:2011 temporal clause variants
 - **Transactions:** BEGIN/COMMIT/ROLLBACK, transaction-local reads, rollback correctness
 - **Data interchange:** COPY TO/FROM CSV/JSON/Parquet, table functions (read_csv, read_json, read_parquet)
-- **Introspection:** SHOW TABLES, DESCRIBE, EXPLAIN, EXPLAIN ANALYZE, EXPLAIN AI, ANALYZE
+- **Introspection:** SHOW TABLES, DESCRIBE, EXPLAIN, EXPLAIN ANALYZE, EXPLAIN AI, ANALYZE, SHOW WAL STATUS, SHOW AUDIT LOG, SHOW PLAN GUIDES
+- **Administration:** SET STRICT_MODE/QUERY_TIMEOUT/QUERY_MAX_MEMORY/COMPACTION_WINDOW, SUGGEST INDEX, VERIFY BACKUP, VACUUM, RESTORE DRY_RUN
 - **Prepared statements:** $1/$2 parameter binding, execution with parameters
 
 ### E) Specialized Engines
@@ -125,6 +141,10 @@ A build is acceptable when all of the following pass:
 - Role creation, permission grants, role-based access
 - Table-level privilege checking
 - Session creation with TTL, token-based access, revocation
+- Audit log: DDL events recorded, SHOW AUDIT LOG returns events
+- Row-level security: CREATE/DROP POLICY, role-based policy matching
+- GDPR erasure: FORGET KEY tombstones all versions, audit log integration
+- Structured error codes: T1xxx syntax, T2xxx schema, T3xxx constraint, T4xxx execution, T6xxx auth
 
 ### H) Change Data Capture
 

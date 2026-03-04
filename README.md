@@ -187,7 +187,18 @@ cargo run --example ai_native      # AI runtime: insights, risk scoring, query p
 - **Data Interchange** — `COPY TO/FROM` CSV, JSON, Parquet. Table functions: `read_csv()`, `read_json()`, `read_parquet()`.
 - **PostgreSQL Wire Protocol** — `tensordb-server` crate accepts Postgres client connections via pgwire, with `/health` HTTP endpoint on port+1.
 - **Authentication & RBAC** — User management, role-based access control, table-level permissions, session management.
+- **Audit Log** — Append-only audit trail for all DDL changes, auth events, policy changes, and GDPR erasures. Queryable via `SHOW AUDIT LOG` or `SELECT * FROM __audit_log`.
+- **Row-Level Security** — `CREATE POLICY` for per-row access control based on session user, role, or arbitrary SQL predicates.
+- **GDPR Erasure** — `FORGET KEY '<key>' FROM <table>` to cryptographically erase all temporal versions while preserving ledger structure.
 - **Connection Pooling** — Configurable pool with warmup, idle eviction, and RAII connection guards.
+- **Structured Error Codes** — Stable numeric codes (`T1001`–`T6002`) with categories (syntax, schema, constraint, execution, auth), suggestions, and position tracking.
+- **"Did You Mean?" Suggestions** — Levenshtein-based fuzzy matching for misspelled table and column names.
+- **Per-Query Resource Limits** — `SET QUERY_TIMEOUT` and `SET QUERY_MAX_MEMORY` to prevent runaway queries.
+- **Online DDL** — `ALTER TABLE DROP COLUMN` and `RENAME COLUMN` without table locks or data rewriting.
+- **Plan Stability** — `CREATE PLAN GUIDE` to pin query plans and prevent regressions.
+- **`SUGGEST INDEX`** — Analyze a query and recommend optimal indexes based on WHERE/JOIN/ORDER BY columns.
+- **`VERIFY BACKUP`** — Validate backup integrity without restoring.
+- **`VACUUM`** — Tombstone cleanup with compaction scheduling via `SET COMPACTION_WINDOW`.
 
 ### AI Runtime & Embedded Inference Engine
 - **Pure-Rust LLM Inference** — Custom inference engine (~3.3K LoC) running Qwen3-0.6B entirely in-process. No C++ toolchain, no llama.cpp, no external model servers. Implements the full stack: GGUF v3 parser, BPE tokenizer, Qwen2 transformer with GQA + RoPE + SwiGLU, KV cache, and token sampling — all in safe Rust.
@@ -496,7 +507,7 @@ graph TB
 TensorDB is configured through the `Config` struct. All parameters have sensible defaults.
 
 <details>
-<summary><strong>All 26 Configuration Parameters</strong></summary>
+<summary><strong>All 33 Configuration Parameters</strong></summary>
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -526,6 +537,13 @@ TensorDB is configured through the `Config` struct. All parameters have sensible
 | `llm_schema_cache_ttl_secs` | `u64` | `60` | Schema cache TTL for NL-to-SQL (seconds) |
 | `llm_grammar_constrained` | `bool` | `true` | Enable SQL grammar-constrained decoding |
 | `slow_query_threshold_us` | `u64` | `10_000` | Slow query log threshold (µs) |
+| `strict_mode` | `bool` | `false` | Fail on silent type coercion |
+| `compaction_window_start_hour` | `Option<u8>` | `None` | Compaction window start (0–23) |
+| `compaction_window_end_hour` | `Option<u8>` | `None` | Compaction window end (0–23) |
+| `wal_archive_enabled` | `bool` | `false` | Enable WAL archival |
+| `wal_archive_dir` | `Option<String>` | `None` | WAL archive directory |
+| `wal_retention_count` | `usize` | `10` | Max archived WAL files |
+| `wal_max_bytes` | `Option<u64>` | `None` | Force flush when WAL exceeds size |
 
 </details>
 
@@ -553,7 +571,7 @@ tensordb/
 │   ├── tensordb-distributed/     # Horizontal scaling: routing, 2PC, rebalancing
 │   ├── tensordb-python/         # Python bindings (PyO3 / maturin)
 │   └── tensordb-node/           # Node.js bindings (napi-rs)
-├── tests/                       # 760+ tests across 36 suites
+├── tests/                       # 800+ tests across 51 suites
 ├── benches/                     # Criterion benchmarks (basic, comparative, multi-engine, inference)
 ├── examples/                    # quickstart.rs, bitemporal.rs, ai_native.rs, fastapi, express
 ├── docs/                        # Interactive documentation site (Starlight/Astro)
@@ -649,6 +667,8 @@ cd docs && npm install && npm run dev
 - **v0.29** — EOAC transactions, PITR, incremental backup, encryption at rest
 - **v0.2.0** — Embedded LLM (Qwen3 0.6B via pure-Rust native inference engine) with purpose-built SQL-mode optimizations (30x per-token speedup via vocab pruning, SIMD matvec, grammar fusion)
 - **v0.30** — Advanced vector search (VECTOR(n), HNSW/IVF-PQ, hybrid search, temporal vectors), horizontal scaling (tensordb-distributed crate), ecosystem (Docker, CI publish workflows, example apps)
+- **v0.31** — Observability (SHOW STATS/SLOW QUERIES/ACTIVE QUERIES/STORAGE/COMPACTION STATUS, /health endpoint, cache hit tracking)
+- **v0.32** — Structured error codes (T1xxx–T6xxx), "Did you mean?" suggestions, SUGGEST INDEX, VERIFY BACKUP, VACUUM, audit log, row-level security, GDPR erasure, per-query resource limits, online DDL (DROP/RENAME COLUMN), plan guides, compaction scheduling, WAL management
 
 ### ~~Phase 1: Observability & Diagnostics~~ (Done)
 
@@ -662,39 +682,39 @@ Surface the internals so users can answer "what is my database doing?" without g
 - ~~**Live query profiling** — Per-query latency histogram (p50/p99/avg), slow query log, cache hit/miss tracking~~
 - ~~**Health endpoint** — `/health` JSON endpoint on pgwire port+1 with uptime, shard count, cache hit rate, storage metrics~~
 
-### Phase 2: Error Quality & Developer Experience
+### ~~Phase 2: Error Quality & Developer Experience~~ (Done)
 
 Make errors helpful instead of cryptic. Reduce friction for new users.
 
-- **Structured error codes** — Stable numeric codes (`T1001 SYNTAX_ERROR`, `T2001 TABLE_NOT_FOUND`, etc.) for programmatic handling, mapped to categories (syntax, schema, constraint, IO, auth)
-- **"Did you mean?" suggestions** — Levenshtein-based fuzzy matching for misspelled table names, column names, SQL keywords, and function names
-- **`SUGGEST INDEX FOR <query>`** — Analyze a query and recommend optimal indexes based on WHERE clauses, JOIN predicates, and ORDER BY columns
+- ~~**Structured error codes** — Stable numeric codes (`T1001 SYNTAX_ERROR`, `T2001 TABLE_NOT_FOUND`, etc.) for programmatic handling, mapped to categories (syntax, schema, constraint, execution, auth)~~
+- ~~**"Did you mean?" suggestions** — Levenshtein-based fuzzy matching for misspelled table names, column names, and function names~~
+- ~~**`SUGGEST INDEX FOR <query>`** — Analyze a query and recommend optimal indexes based on WHERE clauses, JOIN predicates, and ORDER BY columns~~
+- ~~**Strict mode** — `SET STRICT_MODE = ON` to fail on silent type coercion, truncation, and implicit NULL insertion~~
+- ~~**`VERIFY BACKUP <path>`** — Validate backup file integrity (checksums, SSTable format, WAL CRC) without restoring~~
+- ~~**`VACUUM`** — Reclaim space from tombstones, report tombstone count, trigger compaction~~
 - **Progress indicators** — Long-running operations (`COPY`, `BACKUP`, `RESTORE`, compaction, bulk INSERT) report rows processed, bytes written, ETA
-- **Strict mode** — `SET STRICT_MODE = ON` to fail on silent type coercion, truncation, and implicit NULL insertion instead of silently proceeding
-- **`VERIFY BACKUP <path>`** — Validate backup file integrity (checksums, key counts, epoch consistency) without restoring
-- **`VACUUM`** — Reclaim space from tombstones and old temporal versions, report bytes freed and compaction stats
-- **CLI autocomplete** — Context-aware TAB completion for table names, column names, SQL keywords, and function names in the interactive shell
+- **CLI autocomplete** — Context-aware TAB completion for function names and column names in the interactive shell
 
-### Phase 3: Security & Audit
+### ~~Phase 3: Security & Audit~~ (Done)
 
 Enterprise-grade security beyond basic RBAC.
 
-- **Audit log** — Append-only log of all DDL changes, auth events (login, failed attempts, permission changes), and data access patterns, queryable via `SELECT * FROM __audit_log`
-- **Row-level security** — `CREATE POLICY` for per-row access control based on session user, role, or arbitrary predicates
+- ~~**Audit log** — Append-only log of all DDL changes, auth events, policy changes, and GDPR erasures, queryable via `SHOW AUDIT LOG` or `SELECT * FROM __audit_log`~~
+- ~~**Row-level security** — `CREATE POLICY` for per-row access control based on session user, role, or arbitrary predicates~~
+- ~~**GDPR erasure** — `FORGET KEY '<key>' FROM <table>` to erase all temporal versions of a record while preserving ledger structure~~
 - **Key rotation** — Rotate encryption keys without downtime: re-encrypt WAL and SSTables in background, track key versions per file
 - **Column-level encryption** — `CREATE TABLE ... (ssn TEXT ENCRYPTED)` for encrypting sensitive columns at rest with per-column keys
-- **GDPR erasure** — `FORGET KEY <key>` to cryptographically erase all temporal versions of a record while preserving ledger structure
 
-### Phase 4: Operational Maturity
+### ~~Phase 4: Operational Maturity~~ (Done)
 
 Production-hardening for teams running TensorDB in real workloads.
 
-- **Per-query resource limits** — `SET QUERY_TIMEOUT = 5000` and `SET QUERY_MAX_MEMORY = '256MB'` to prevent runaway queries
-- **Online DDL** — `ALTER TABLE ADD COLUMN`, `DROP COLUMN`, `RENAME COLUMN` without table locks or downtime
-- **Plan stability** — `CREATE PLAN GUIDE` to pin query plans and prevent regressions from stale statistics
-- **Backup dry-run** — `RESTORE FROM <path> DRY_RUN` to validate a restore without writing data, showing what would change
-- **Compaction scheduling** — User-configurable compaction windows (`SET COMPACTION_WINDOW = '02:00-06:00'`) to avoid peak-hour I/O
-- **WAL size management** — Configurable WAL retention, automatic WAL archival, and `SHOW WAL STATUS` for monitoring
+- ~~**Per-query resource limits** — `SET QUERY_TIMEOUT = 5000` and `SET QUERY_MAX_MEMORY = 268435456` to prevent runaway queries~~
+- ~~**Online DDL** — `ALTER TABLE DROP COLUMN`, `RENAME COLUMN` without table locks or downtime~~
+- ~~**Plan stability** — `CREATE PLAN GUIDE` to pin query plans and prevent regressions from stale statistics~~
+- ~~**Backup dry-run** — `RESTORE FROM '<path>' DRY_RUN` to validate a restore without writing data, showing what would change~~
+- ~~**Compaction scheduling** — User-configurable compaction windows (`SET COMPACTION_WINDOW = '02:00-06:00'`) to avoid peak-hour I/O~~
+- ~~**WAL size management** — Configurable WAL retention, automatic WAL archival, and `SHOW WAL STATUS` for monitoring~~
 
 ### Phase 5: AI Runtime v2
 

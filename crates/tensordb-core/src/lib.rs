@@ -23,7 +23,7 @@ pub use crate::engine::db::{
     BenchOptions, BenchReport, Database, DbStats, ExplainRow, PrefixScanRow,
 };
 pub use crate::engine::shard::{ChangeEvent, GetResult, ShardReadHandle, WriteBatchItem};
-pub use crate::error::{Result, TensorError};
+pub use crate::error::{sql_exec_err, sql_parse_err, ErrorCode, Result, SqlError, TensorError};
 pub use crate::sql::exec::{ColumnStatistics, PreparedStatement, TableStats};
 pub use crate::sql::planner::{explain_plan, generate_plan, PlanNode};
 pub use crate::sql::vectorized::{

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::auth::rbac::{Permission, Privilege, UserRecord};
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 /// A session token for authenticated access.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -123,7 +123,7 @@ impl AuthContext {
         if self.has_privilege(privilege, table) {
             Ok(())
         } else {
-            Err(TensorError::SqlExec(format!(
+            Err(sql_exec_err(format!(
                 "permission denied: {} on {} for user {}",
                 privilege.name(),
                 table.unwrap_or("*"),

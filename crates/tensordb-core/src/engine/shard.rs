@@ -81,6 +81,9 @@ pub enum ShardCommand {
     Stats {
         resp: Sender<ShardStats>,
     },
+    ForceCompaction {
+        resp: Sender<Result<()>>,
+    },
     Shutdown,
 }
 
@@ -545,6 +548,12 @@ impl ShardRuntime {
                 }
                 ShardCommand::Stats { resp } => {
                     let _ = resp.send(self.stats.clone());
+                }
+                ShardCommand::ForceCompaction { resp } => {
+                    let result = self
+                        .flush_active_memtable()
+                        .and_then(|_| self.maybe_compact());
+                    let _ = resp.send(result);
                 }
                 ShardCommand::Shutdown => {
                     let _ = self.wal.sync();

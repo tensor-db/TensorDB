@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 /// Batch size for vectorized processing.
 pub const DEFAULT_BATCH_SIZE: usize = 1024;
@@ -287,7 +287,7 @@ impl RecordBatch {
         let num_rows = columns.first().map(|c| c.len()).unwrap_or(0);
         for (i, col) in columns.iter().enumerate() {
             if col.len() != num_rows {
-                return Err(TensorError::SqlExec(format!(
+                return Err(sql_exec_err(format!(
                     "column {} has {} rows, expected {}",
                     i,
                     col.len(),
@@ -372,9 +372,7 @@ impl RecordBatch {
 /// Vectorized filter: apply a boolean selection vector to a batch.
 pub fn vectorized_filter(batch: &RecordBatch, selection: &[bool]) -> Result<RecordBatch> {
     if selection.len() != batch.num_rows() {
-        return Err(TensorError::SqlExec(
-            "selection vector length mismatch".to_string(),
-        ));
+        return Err(sql_exec_err("selection vector length mismatch".to_string()));
     }
 
     let indices: Vec<usize> = selection

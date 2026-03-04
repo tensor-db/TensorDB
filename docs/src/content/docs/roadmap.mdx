@@ -13,9 +13,9 @@ TensorDB is under active development. This page tracks what we've shipped, what'
 
 ---
 
-## Current Status: v0.2.0
+## Current Status: v0.32
 
-TensorDB v0.2.0 ships a fully functional bitemporal ledger database with:
+TensorDB v0.32 ships a fully functional bitemporal ledger database with:
 
 - Embedded SQL engine (DDL, DML, JOINs, CTEs, window functions, set operations)
 - Bitemporal queries (SQL:2011 `SYSTEM_TIME` and `APPLICATION_TIME`)
@@ -34,6 +34,10 @@ TensorDB v0.2.0 ships a fully functional bitemporal ledger database with:
 - Authentication and role-based access control
 - Python, Node.js, and CLI interfaces
 - Parquet, CSV, JSON data interchange
+- Structured error codes with "Did you mean?" suggestions
+- Audit logging, row-level security, GDPR erasure
+- Per-query resource limits, online DDL, plan stability
+- VACUUM, VERIFY BACKUP, SUGGEST INDEX, compaction scheduling, WAL management
 
 ---
 
@@ -249,10 +253,11 @@ Scale TensorDB from embedded to distributed, from single-node to cloud-native.
 
 ### Compliance & Audit
 
-- Immutable audit log with tamper-evident checksums
-- GDPR right-to-erasure (temporal tombstones)
+- ~~Immutable audit log~~ (Done — `SHOW AUDIT LOG`, append-only `__audit_log/` prefix)
+- ~~GDPR right-to-erasure~~ (Done — `FORGET KEY '<key>' FROM <table>`)
 - SOC 2 / HIPAA compliance checklist
-- Row-level security policies
+- ~~Row-level security policies~~ (Done — `CREATE POLICY ... USING (...)`)
+
 
 ### Embedded Edge Deployment
 
@@ -300,6 +305,9 @@ Continuous performance improvements tracked separately from feature work.
 
 | Version | Milestone |
 |---|---|
+| **v0.32** | Error quality, security & audit, operational maturity |
+| **v0.31** | Observability & diagnostics (SHOW commands, /health) |
+| **v0.30** | Vector search, horizontal scaling, ecosystem |
 | **v0.2.0** | Embedded LLM for natural language to SQL |
 | **v0.28** | Fast write engine (1.9 µs, 20x faster than SQLite) |
 | **v0.27** | Raft consensus, WAL shipping, scatter-gather |

@@ -42,6 +42,31 @@ Triggered when a level exceeds its size target:
 - Bitemporal queries (VALID AT)
 - Audit trail completeness
 
+## VACUUM
+
+The `VACUUM` command scans for tombstones (empty-value records from deletions) and triggers compaction to physically reclaim space.
+
+```sql
+-- Vacuum a specific table
+VACUUM users;
+
+-- Vacuum all tables
+VACUUM;
+```
+
+Returns the number of tombstones found and scheduled for compaction.
+
+## Compaction Scheduling
+
+Restrict compaction to off-peak hours using a time window:
+
+```sql
+-- Only compact between 2 AM and 6 AM
+SET COMPACTION_WINDOW = '02:00-06:00';
+```
+
+When a compaction window is configured, background compaction only runs during the specified hours. The `VACUUM` command still triggers immediate compaction regardless of the window.
+
 ## Configuration
 
 | Parameter | Default | Description |
@@ -50,3 +75,5 @@ Triggered when a level exceeds its size target:
 | `compaction_l1_target_bytes` | 10MB | L1 size target |
 | `compaction_size_ratio` | 10 | Size multiplier between levels |
 | `compaction_max_levels` | 7 | Maximum number of levels (L0–L6) |
+| `compaction_window_start_hour` | `None` | Start hour for compaction window (0–23) |
+| `compaction_window_end_hour` | `None` | End hour for compaction window (0–23) |

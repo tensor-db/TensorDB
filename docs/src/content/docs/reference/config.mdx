@@ -38,6 +38,13 @@ Config {
     fast_write_enabled: true,
     fast_write_wal_batch_interval_us: 1000,
     slow_query_threshold_us: 10_000,         // 10ms
+    strict_mode: false,
+    compaction_window_start_hour: None,
+    compaction_window_end_hour: None,
+    wal_archive_enabled: false,
+    wal_archive_dir: None,
+    wal_retention_count: 10,
+    wal_max_bytes: None,
 }
 ```
 

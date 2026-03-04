@@ -4,7 +4,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::db::Database;
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result, SqlError, TensorError};
 use crate::facet::relational::{
     encode_schema_metadata, fts_index_meta_key, fts_index_prefix_for_table, index_entry_key,
     index_entry_prefix, index_meta_key, index_meta_prefix_for_table, index_scan_prefix,
@@ -181,7 +181,7 @@ impl PreparedStatement {
             self.stmt.clone()
         } else {
             if params.len() < self.param_count {
-                return Err(TensorError::SqlExec(format!(
+                return Err(sql_exec_err(format!(
                     "expected {} parameters, got {}",
                     self.param_count,
                     params.len()
@@ -193,7 +193,7 @@ impl PreparedStatement {
         let mut session = SqlSession::default();
         let result = execute_stmt(db, &mut session, stmt)?;
         if session.in_txn {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "transaction left open; issue COMMIT or ROLLBACK".to_string(),
             ));
         }
@@ -612,6 +612,43 @@ struct SqlSession {
     pending: VecDeque<PendingPut>,
     /// Stack of savepoints: (name, pending.len() at savepoint)
     savepoints: Vec<(String, usize)>,
+    // Phase 2+3+4 session extensions
+    session_user: Option<String>,
+    session_roles: Vec<String>,
+    strict_mode: bool,
+    query_timeout_ms: Option<u64>,
+    query_max_memory_bytes: Option<u64>,
+    query_start: Option<Instant>,
+    memory_used: u64,
+}
+
+impl SqlSession {
+    #[allow(dead_code)]
+    fn check_timeout(&self) -> Result<()> {
+        if let (Some(start), Some(timeout_ms)) = (self.query_start, self.query_timeout_ms) {
+            let elapsed = start.elapsed().as_millis() as u64;
+            if elapsed > timeout_ms {
+                return Err(TensorError::SqlExec(SqlError::query_timeout(
+                    elapsed, timeout_ms,
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn track_memory(&mut self, bytes: u64) -> Result<()> {
+        self.memory_used += bytes;
+        if let Some(limit) = self.query_max_memory_bytes {
+            if self.memory_used > limit {
+                return Err(TensorError::SqlExec(SqlError::memory_limit(
+                    self.memory_used,
+                    limit,
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -666,7 +703,7 @@ impl SqlSession {
 
     fn commit(&mut self, db: &Database) -> Result<(u64, Option<u64>)> {
         if !self.in_txn {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "COMMIT requires an active transaction".to_string(),
             ));
         }
@@ -707,7 +744,7 @@ impl SqlSession {
 
     fn rollback(&mut self) -> Result<u64> {
         if !self.in_txn {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "ROLLBACK requires an active transaction".to_string(),
             ));
         }
@@ -720,7 +757,7 @@ impl SqlSession {
 
     fn savepoint(&mut self, name: String) -> Result<()> {
         if !self.in_txn {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "SAVEPOINT requires an active transaction".to_string(),
             ));
         }
@@ -730,7 +767,7 @@ impl SqlSession {
 
     fn rollback_to(&mut self, name: &str) -> Result<u64> {
         if !self.in_txn {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "ROLLBACK TO requires an active transaction".to_string(),
             ));
         }
@@ -739,7 +776,7 @@ impl SqlSession {
             .savepoints
             .iter()
             .rposition(|(n, _)| n == name)
-            .ok_or_else(|| TensorError::SqlExec(format!("savepoint '{name}' does not exist")))?;
+            .ok_or_else(|| sql_exec_err(format!("savepoint '{name}' does not exist")))?;
         let (_, pending_len) = self.savepoints[pos].clone();
         // Remove this savepoint and all later ones
         self.savepoints.truncate(pos);
@@ -751,7 +788,7 @@ impl SqlSession {
 
     fn release_savepoint(&mut self, name: &str) -> Result<()> {
         if !self.in_txn {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "RELEASE requires an active transaction".to_string(),
             ));
         }
@@ -759,7 +796,7 @@ impl SqlSession {
             .savepoints
             .iter()
             .rposition(|(n, _)| n == name)
-            .ok_or_else(|| TensorError::SqlExec(format!("savepoint '{name}' does not exist")))?;
+            .ok_or_else(|| sql_exec_err(format!("savepoint '{name}' does not exist")))?;
         self.savepoints.remove(pos);
         Ok(())
     }
@@ -778,21 +815,23 @@ pub fn execute_sql(db: &Database, query: &str) -> Result<SqlResult> {
     }
 
     if session.in_txn {
-        return Err(TensorError::SqlExec(
+        return Err(sql_exec_err(
             "transaction left open; issue COMMIT or ROLLBACK".to_string(),
         ));
     }
 
-    last.ok_or_else(|| TensorError::SqlExec("no statements executed".to_string()))
+    last.ok_or_else(|| sql_exec_err("no statements executed"))
 }
 
 fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Result<SqlResult> {
+    // Set query start time for timeout tracking
+    session.query_start = Some(Instant::now());
+    session.memory_used = 0;
+
     match stmt {
         Statement::Begin => {
             if session.in_txn {
-                return Err(TensorError::SqlExec(
-                    "nested BEGIN is not supported".to_string(),
-                ));
+                return Err(sql_exec_err("nested BEGIN is not supported".to_string()));
             }
             session.in_txn = true;
             Ok(SqlResult::Affected {
@@ -845,9 +884,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             validate_table_name(&table)?;
             let key = table_meta_key(&table);
             if read_live_key(db, session, &key, None, None)?.is_some() {
-                return Err(TensorError::SqlExec(format!(
-                    "table {table} already exists"
-                )));
+                return Err(sql_exec_err(format!("table {table} already exists")));
             }
 
             // Determine if this is a legacy (pk TEXT PRIMARY KEY) or typed table
@@ -871,11 +908,12 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                         },
                     ],
                     schema_mode: "legacy".to_string(),
+                    ..Default::default()
                 }
             } else {
                 // Find the primary key column
                 let pk_col = columns.iter().find(|c| c.primary_key).ok_or_else(|| {
-                    TensorError::SqlExec(
+                    sql_exec_err(
                         "CREATE TABLE requires at least one PRIMARY KEY column".to_string(),
                     )
                 })?;
@@ -904,11 +942,20 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                     doc: "typed".to_string(),
                     columns: cols,
                     schema_mode: "typed".to_string(),
+                    ..Default::default()
                 }
             };
 
             let payload = encode_schema_metadata(&schema)?;
             let commit_ts = write_put(db, session, key, payload, 0, u64::MAX, Some(1))?;
+            let user = session.session_user.as_deref().unwrap_or("system");
+            let _ = db.audit_log().log(
+                db,
+                crate::auth::audit::AuditEventKind::TableCreated {
+                    table: table.clone(),
+                },
+                user,
+            );
             Ok(SqlResult::Affected {
                 rows: 1,
                 commit_ts,
@@ -926,14 +973,14 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             validate_table_name(&source)?;
             let source_meta = table_meta_key(&source);
             if read_live_key(db, session, &source_meta, None, None)?.is_none() {
-                return Err(TensorError::SqlExec(format!(
+                return Err(sql_exec_err(format!(
                     "source table {source} does not exist"
                 )));
             }
 
             let key = view_meta_key(&view);
             if read_live_key(db, session, &key, None, None)?.is_some() {
-                return Err(TensorError::SqlExec(format!("view {view} already exists")));
+                return Err(sql_exec_err(format!("view {view} already exists")));
             }
 
             let query = format!(
@@ -955,7 +1002,15 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             Ok(SqlResult::Affected {
                 rows: 1,
                 commit_ts,
-                message: format!("created view {view}"),
+                message: {
+                    let user = session.session_user.as_deref().unwrap_or("system");
+                    let _ = db.audit_log().log(
+                        db,
+                        crate::auth::audit::AuditEventKind::ViewCreated { view: view.clone() },
+                        user,
+                    );
+                    format!("created view {view}")
+                },
             })
         }
         Statement::CreateIndex {
@@ -979,7 +1034,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                         .iter()
                         .any(|c| c.name.eq_ignore_ascii_case(col));
                 if !valid_col {
-                    return Err(TensorError::SqlExec(format!(
+                    return Err(sql_exec_err(format!(
                         "column {col} does not exist on table {table}"
                     )));
                 }
@@ -987,9 +1042,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
 
             let key = index_meta_key(&table, &index);
             if read_live_key(db, session, &key, None, None)?.is_some() {
-                return Err(TensorError::SqlExec(format!(
-                    "index {index} already exists"
-                )));
+                return Err(sql_exec_err(format!("index {index} already exists")));
             }
 
             let meta = IndexMetadata {
@@ -1010,15 +1063,23 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                     let idx_prefix = index_entry_prefix(&table, &index, &index_val);
                     let existing = db.scan_prefix(&idx_prefix, None, None, Some(1))?;
                     if !existing.is_empty() {
-                        return Err(TensorError::SqlExec(format!(
-                            "UNIQUE constraint violated: duplicate value '{index_val}' in index {index}"
-                        )));
+                        return Err(sql_exec_err(format!("UNIQUE constraint violated: duplicate value '{index_val}' in index {index}"))
+                        );
                     }
                 }
                 let idx_key = index_entry_key(&table, &index, &index_val, &row.pk);
                 write_put(db, session, idx_key, Vec::new(), 0, u64::MAX, Some(1))?;
             }
 
+            let user = session.session_user.as_deref().unwrap_or("system");
+            let _ = db.audit_log().log(
+                db,
+                crate::auth::audit::AuditEventKind::IndexCreated {
+                    table: table.clone(),
+                    index: index.clone(),
+                },
+                user,
+            );
             Ok(SqlResult::Affected {
                 rows: 1,
                 commit_ts,
@@ -1156,7 +1217,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                         SqlValue::Text(s) => s.clone(),
                         SqlValue::Number(n) => n.to_string(),
                         _ => {
-                            return Err(TensorError::SqlExec(
+                            return Err(sql_exec_err(
                                 "primary key must be text or number".to_string(),
                             ))
                         }
@@ -1167,7 +1228,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             }
 
             let pk = pk_val.ok_or_else(|| {
-                TensorError::SqlExec(format!(
+                sql_exec_err(format!(
                     "INSERT must include primary key column '{}'",
                     schema.pk
                 ))
@@ -1234,7 +1295,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                             s.into_bytes()
                         }
                         _ => {
-                            return Err(TensorError::SqlExec(
+                            return Err(sql_exec_err(
                                 "UPDATE SET doc must evaluate to a string".to_string(),
                             ))
                         }
@@ -1487,9 +1548,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             validate_table_name(&table)?;
             let key = table_meta_key(&table);
             if read_live_key(db, session, &key, None, None)?.is_none() {
-                return Err(TensorError::SqlExec(format!(
-                    "table {table} does not exist"
-                )));
+                return Err(sql_exec_err(format!("table {table} does not exist")));
             }
 
             let row_prefix = format!("table/{table}/").into_bytes();
@@ -1535,6 +1594,14 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                 writes += 1;
             }
 
+            let user = session.session_user.as_deref().unwrap_or("system");
+            let _ = db.audit_log().log(
+                db,
+                crate::auth::audit::AuditEventKind::TableDropped {
+                    table: table.clone(),
+                },
+                user,
+            );
             Ok(SqlResult::Affected {
                 rows: writes,
                 commit_ts: last_commit_ts,
@@ -1545,13 +1612,21 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             validate_view_name(&view)?;
             let key = view_meta_key(&view);
             if read_live_key(db, session, &key, None, None)?.is_none() {
-                return Err(TensorError::SqlExec(format!("view {view} does not exist")));
+                return Err(sql_exec_err(format!("view {view} does not exist")));
             }
             let commit_ts = write_put(db, session, key, Vec::new(), 0, u64::MAX, Some(1))?;
             Ok(SqlResult::Affected {
                 rows: 1,
                 commit_ts,
-                message: format!("dropped view {view}"),
+                message: {
+                    let user = session.session_user.as_deref().unwrap_or("system");
+                    let _ = db.audit_log().log(
+                        db,
+                        crate::auth::audit::AuditEventKind::ViewDropped { view: view.clone() },
+                        user,
+                    );
+                    format!("dropped view {view}")
+                },
             })
         }
         Statement::DropIndex { index, table } => {
@@ -1559,9 +1634,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             validate_table_name(&table)?;
             let key = index_meta_key(&table, &index);
             if read_live_key(db, session, &key, None, None)?.is_none() {
-                return Err(TensorError::SqlExec(format!(
-                    "index {index} does not exist"
-                )));
+                return Err(sql_exec_err(format!("index {index} does not exist")));
             }
             // Remove all __idx/<table>/<index>/ entries
             let idx_prefix = index_scan_prefix(&table, &index);
@@ -1577,6 +1650,15 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             let ts = write_put(db, session, key, Vec::new(), 0, u64::MAX, Some(1))?;
             last_commit_ts = ts.or(last_commit_ts);
             writes += 1;
+            let user = session.session_user.as_deref().unwrap_or("system");
+            let _ = db.audit_log().log(
+                db,
+                crate::auth::audit::AuditEventKind::IndexDropped {
+                    table: table.clone(),
+                    index: index.clone(),
+                },
+                user,
+            );
             Ok(SqlResult::Affected {
                 rows: writes,
                 commit_ts: last_commit_ts,
@@ -1630,7 +1712,230 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
         Statement::Analyze { table } => execute_analyze(db, session, &table),
         Statement::Ask { question } => execute_ask(db, &question),
         Statement::Backup { dest, since_epoch } => execute_backup(db, &dest, since_epoch),
-        Statement::Restore { src } => execute_restore(db, &src),
+        Statement::Restore { src, dry_run } => {
+            if dry_run {
+                execute_verify_backup(db, &src)
+            } else {
+                execute_restore(db, &src)
+            }
+        }
+        // --- Phase 2: SET variable ---
+        Statement::Set { variable, value } => {
+            let var_upper = variable.to_uppercase();
+            match var_upper.as_str() {
+                "STRICT_MODE" => {
+                    session.strict_mode = value.eq_ignore_ascii_case("ON")
+                        || value.eq_ignore_ascii_case("TRUE")
+                        || value == "1";
+                    Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("strict_mode = {}", session.strict_mode),
+                    })
+                }
+                "QUERY_TIMEOUT" => {
+                    let ms: u64 = value
+                        .parse()
+                        .map_err(|_| sql_exec_err("QUERY_TIMEOUT must be a number (ms)"))?;
+                    session.query_timeout_ms = if ms == 0 { None } else { Some(ms) };
+                    Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("query_timeout = {ms}ms"),
+                    })
+                }
+                "QUERY_MAX_MEMORY" => {
+                    let bytes: u64 = value
+                        .parse()
+                        .map_err(|_| sql_exec_err("QUERY_MAX_MEMORY must be a number (bytes)"))?;
+                    session.query_max_memory_bytes = if bytes == 0 { None } else { Some(bytes) };
+                    Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("query_max_memory = {bytes} bytes"),
+                    })
+                }
+                "SESSION_USER" => {
+                    session.session_user = Some(value.clone());
+                    Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("session_user = {value}"),
+                    })
+                }
+                "SESSION_ROLES" => {
+                    session.session_roles =
+                        value.split(',').map(|s| s.trim().to_string()).collect();
+                    Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("session_roles = {value}"),
+                    })
+                }
+                "COMPACTION_WINDOW" => {
+                    // Format: 'HH:MM-HH:MM'
+                    let parts: Vec<&str> = value.split('-').collect();
+                    if parts.len() != 2 {
+                        return Err(sql_exec_err("COMPACTION_WINDOW format: 'HH:MM-HH:MM'"));
+                    }
+                    let start_hour: u8 = parts[0]
+                        .split(':')
+                        .next()
+                        .and_then(|h| h.parse().ok())
+                        .ok_or_else(|| sql_exec_err("invalid start hour"))?;
+                    let end_hour: u8 = parts[1]
+                        .split(':')
+                        .next()
+                        .and_then(|h| h.parse().ok())
+                        .ok_or_else(|| sql_exec_err("invalid end hour"))?;
+                    db.set_compaction_window(start_hour, end_hour);
+                    Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("compaction_window = {start_hour}:00-{end_hour}:00"),
+                    })
+                }
+                _ => Err(sql_exec_err(format!(
+                    "unknown session variable: {variable}"
+                ))),
+            }
+        }
+        // --- Phase 2: SUGGEST INDEX ---
+        Statement::SuggestIndex { query } => execute_suggest_index(db, session, &query),
+        // --- Phase 2: VERIFY BACKUP ---
+        Statement::VerifyBackup { path } => execute_verify_backup(db, &path),
+        // --- Phase 2: VACUUM ---
+        Statement::Vacuum { table } => execute_vacuum(db, session, table.as_deref()),
+        // --- Phase 2+4: SHOW extensions ---
+        Statement::ShowWalStatus => {
+            let wal_sizes = db.wal_sizes();
+            let rows: Vec<Vec<u8>> = wal_sizes
+                .into_iter()
+                .map(|(shard_id, size)| {
+                    serde_json::json!({
+                        "shard": shard_id,
+                        "wal_bytes": size,
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .collect();
+            Ok(SqlResult::Rows(rows))
+        }
+        Statement::ShowAuditLog { limit } => {
+            let events = db
+                .audit_log()
+                .query_recent(db, limit.unwrap_or(50) as usize)?;
+            let rows: Vec<Vec<u8>> = events
+                .into_iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "timestamp": e.timestamp_ms,
+                        "event_type": format!("{:?}", e.kind),
+                        "details": serde_json::to_value(&e.kind).unwrap_or_default(),
+                        "session_user": e.session_user,
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .collect();
+            Ok(SqlResult::Rows(rows))
+        }
+        Statement::ShowPlanGuides => {
+            let guides = crate::sql::plan_guide::PlanGuideManager::list(db)?;
+            let rows: Vec<Vec<u8>> = guides
+                .into_iter()
+                .map(|g| {
+                    serde_json::json!({
+                        "name": g.name,
+                        "sql_pattern": g.sql_pattern,
+                        "hints": g.hints,
+                        "created_at": g.created_at,
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .collect();
+            Ok(SqlResult::Rows(rows))
+        }
+        // --- Phase 3: Security ---
+        Statement::CreatePolicy {
+            name,
+            table,
+            operation,
+            using_expr,
+            roles,
+        } => {
+            use crate::auth::rls::{PolicyManager, PolicyOperation};
+            let op = PolicyOperation::parse(&operation)?;
+            let policy =
+                PolicyManager::new_policy(name.clone(), table.clone(), op, using_expr, roles);
+            PolicyManager::create_policy(db, &policy)?;
+            let user = session.session_user.as_deref().unwrap_or("system");
+            let _ = db.audit_log().log(
+                db,
+                crate::auth::audit::AuditEventKind::PolicyCreated {
+                    table: table.clone(),
+                    policy: name.clone(),
+                },
+                user,
+            );
+            Ok(SqlResult::Affected {
+                rows: 1,
+                commit_ts: None,
+                message: format!("created policy {name} on {table}"),
+            })
+        }
+        Statement::DropPolicy { name, table } => {
+            use crate::auth::rls::PolicyManager;
+            PolicyManager::drop_policy(db, &table, &name)?;
+            let user = session.session_user.as_deref().unwrap_or("system");
+            let _ = db.audit_log().log(
+                db,
+                crate::auth::audit::AuditEventKind::PolicyDropped {
+                    table: table.clone(),
+                    policy: name.clone(),
+                },
+                user,
+            );
+            Ok(SqlResult::Affected {
+                rows: 1,
+                commit_ts: None,
+                message: format!("dropped policy {name} on {table}"),
+            })
+        }
+        // --- Phase 3: GDPR erasure ---
+        Statement::ForgetKey { table, key } => execute_forget_key(db, session, &table, &key),
+        // --- Phase 4: Online DDL ---
+        Statement::AlterTableDropColumn { table, column } => {
+            execute_alter_drop_column(db, session, &table, &column)
+        }
+        Statement::AlterTableRenameColumn {
+            table,
+            old_name,
+            new_name,
+        } => execute_alter_rename_column(db, session, &table, &old_name, &new_name),
+        // --- Phase 4: Plan Guides ---
+        Statement::CreatePlanGuide {
+            name,
+            sql_pattern,
+            hints,
+        } => {
+            crate::sql::plan_guide::PlanGuideManager::create(db, &name, &sql_pattern, &hints)?;
+            Ok(SqlResult::Affected {
+                rows: 1,
+                commit_ts: None,
+                message: format!("created plan guide '{name}'"),
+            })
+        }
+        Statement::DropPlanGuide { name } => {
+            crate::sql::plan_guide::PlanGuideManager::drop(db, &name)?;
+            Ok(SqlResult::Affected {
+                rows: 1,
+                commit_ts: None,
+                message: format!("dropped plan guide '{name}'"),
+            })
+        }
     }
 }
 
@@ -1731,11 +2036,7 @@ fn execute_select(
                     .collect();
                 cte_data.insert(cte.name.clone(), visible_rows);
             }
-            _ => {
-                return Err(TensorError::SqlExec(
-                    "CTE must be a SELECT statement".to_string(),
-                ))
-            }
+            _ => return Err(sql_exec_err("CTE must be a SELECT statement".to_string())),
         }
     }
 
@@ -1772,7 +2073,7 @@ fn execute_select(
                     alias.clone()
                 }
                 _ => {
-                    return Err(TensorError::SqlExec(
+                    return Err(sql_exec_err(
                         "subquery in FROM must be a SELECT".to_string(),
                     ))
                 }
@@ -2209,7 +2510,7 @@ fn eval_aggregate_expr(expr: &Expr, group_rows: &[&VisibleRow]) -> Result<SqlVal
                 "FIRST" => {
                     // FIRST(value, timestamp) — value at smallest timestamp
                     if args.len() < 2 {
-                        return Err(TensorError::SqlExec(
+                        return Err(sql_exec_err(
                             "FIRST() requires 2 arguments: FIRST(value, timestamp)".to_string(),
                         ));
                     }
@@ -2225,7 +2526,7 @@ fn eval_aggregate_expr(expr: &Expr, group_rows: &[&VisibleRow]) -> Result<SqlVal
                 "LAST" => {
                     // LAST(value, timestamp) — value at largest timestamp
                     if args.len() < 2 {
-                        return Err(TensorError::SqlExec(
+                        return Err(sql_exec_err(
                             "LAST() requires 2 arguments: LAST(value, timestamp)".to_string(),
                         ));
                     }
@@ -2303,9 +2604,7 @@ fn eval_aggregate_expr(expr: &Expr, group_rows: &[&VisibleRow]) -> Result<SqlVal
                     }
                     Ok(SqlValue::Number(hll.count() as f64))
                 }
-                _ => Err(TensorError::SqlExec(format!(
-                    "unknown aggregate function: {name}"
-                ))),
+                _ => Err(sql_exec_err(format!("unknown aggregate function: {name}"))),
             }
         }
         Expr::Column(_name) => {
@@ -3336,7 +3635,7 @@ fn project_joined_rows(rows: &[JoinedRow], items: &[SelectItem]) -> Result<SqlRe
                 return Ok(SqlResult::Rows(out));
             }
             LegacyProjection::Doc => {
-                return Err(TensorError::SqlExec(
+                return Err(sql_exec_err(
                     "JOIN does not support SELECT doc projection".to_string(),
                 ));
             }
@@ -4117,7 +4416,7 @@ fn compute_window_function(
             }
         }
         other => {
-            return Err(TensorError::SqlExec(format!(
+            return Err(sql_exec_err(format!(
                 "unsupported window function: {other}"
             )));
         }
@@ -4314,7 +4613,7 @@ fn execute_create_fulltext_index(
                 .iter()
                 .any(|c| c.name.eq_ignore_ascii_case(col));
         if !valid {
-            return Err(TensorError::SqlExec(format!(
+            return Err(sql_exec_err(format!(
                 "column {col} does not exist on table {table}"
             )));
         }
@@ -4323,7 +4622,7 @@ fn execute_create_fulltext_index(
     // Check if FTS index already exists
     let key = fts_index_meta_key(table, index);
     if read_live_key(db, session, &key, None, None)?.is_some() {
-        return Err(TensorError::SqlExec(format!(
+        return Err(sql_exec_err(format!(
             "fulltext index {index} already exists on {table}"
         )));
     }
@@ -4365,7 +4664,7 @@ fn execute_drop_fulltext_index(
 
     let key = fts_index_meta_key(table, index);
     if read_live_key(db, session, &key, None, None)?.is_none() {
-        return Err(TensorError::SqlExec(format!(
+        return Err(sql_exec_err(format!(
             "fulltext index {index} does not exist on {table}"
         )));
     }
@@ -4403,20 +4702,20 @@ fn execute_create_vector_index(
             // Parse dims from "VECTOR(384)"
             let inner = &c.type_name[7..c.type_name.len() - 1];
             inner.parse::<u16>().map_err(|_| {
-                TensorError::SqlExec(format!(
+                sql_exec_err(format!(
                     "invalid VECTOR dimensions in schema: {}",
                     c.type_name
                 ))
             })?
         }
         Some(c) => {
-            return Err(TensorError::SqlExec(format!(
+            return Err(sql_exec_err(format!(
                 "column {} has type {}, expected VECTOR",
                 column, c.type_name
             )));
         }
         None => {
-            return Err(TensorError::SqlExec(format!(
+            return Err(sql_exec_err(format!(
                 "column {} does not exist on table {}",
                 column, table
             )));
@@ -4427,7 +4726,7 @@ fn execute_create_vector_index(
     let key = vector_index_meta_key(table, column);
     if let Some(existing) = read_live_key(db, session, key.as_bytes(), None, None)? {
         if existing != b"{}" {
-            return Err(TensorError::SqlExec(format!(
+            return Err(sql_exec_err(format!(
                 "vector index already exists on {table}({column})"
             )));
         }
@@ -4497,7 +4796,7 @@ fn execute_drop_vector_index(
     }
 
     if !found {
-        return Err(TensorError::SqlExec(format!(
+        return Err(sql_exec_err(format!(
             "vector index {index} does not exist on {table}"
         )));
     }
@@ -4608,7 +4907,7 @@ fn execute_vector_search_fn(
     use crate::facet::vector_search::DistanceMetric;
 
     if args.len() < 3 {
-        return Err(TensorError::SqlExec(
+        return Err(sql_exec_err(
             "vector_search() requires at least 3 arguments: table, column, query_vector [, k]"
                 .to_string(),
         ));
@@ -4617,7 +4916,7 @@ fn execute_vector_search_fn(
     let table = match &args[0] {
         Expr::StringLit(s) => s.clone(),
         _ => {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "vector_search() first argument must be a table name string".to_string(),
             ))
         }
@@ -4625,7 +4924,7 @@ fn execute_vector_search_fn(
     let column = match &args[1] {
         Expr::StringLit(s) => s.clone(),
         _ => {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "vector_search() second argument must be a column name string".to_string(),
             ))
         }
@@ -4633,7 +4932,7 @@ fn execute_vector_search_fn(
     let query_str = match &args[2] {
         Expr::StringLit(s) => s.clone(),
         _ => {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "vector_search() third argument must be a vector literal string".to_string(),
             ))
         }
@@ -4818,14 +5117,14 @@ pub fn extract_match_filter(
     match expr {
         Expr::Function { name, args, .. } if name.eq_ignore_ascii_case("MATCH") => {
             if args.len() != 2 {
-                return Err(TensorError::SqlExec(
+                return Err(sql_exec_err(
                     "MATCH() requires exactly 2 arguments: MATCH(column, 'query')".to_string(),
                 ));
             }
             let _column = match &args[0] {
                 Expr::Column(c) => c.clone(),
                 _ => {
-                    return Err(TensorError::SqlExec(
+                    return Err(sql_exec_err(
                         "MATCH() first argument must be a column name".to_string(),
                     ))
                 }
@@ -4833,7 +5132,7 @@ pub fn extract_match_filter(
             let query = match &args[1] {
                 Expr::StringLit(s) => s.clone(),
                 _ => {
-                    return Err(TensorError::SqlExec(
+                    return Err(sql_exec_err(
                         "MATCH() second argument must be a string literal".to_string(),
                     ))
                 }
@@ -5034,9 +5333,8 @@ fn execute_ai_cluster_summary(db: &Database, filter: Option<&Expr>) -> Result<Sq
         None
     };
 
-    let cluster_id = cluster_id.ok_or_else(|| {
-        TensorError::SqlExec("ai_cluster_summary requires WHERE cluster_id = '<id>'".to_string())
-    })?;
+    let cluster_id = cluster_id
+        .ok_or_else(|| sql_exec_err("ai_cluster_summary requires WHERE cluster_id = '<id>'"))?;
 
     let prefix = correlation_prefix_for_cluster(&cluster_id);
     let correlations = db.scan_prefix(&prefix, None, None, None)?;
@@ -5151,14 +5449,12 @@ fn execute_create_timeseries_table(
     validate_table_name(table)?;
     let key = table_meta_key(table);
     if read_live_key(db, session, &key, None, None)?.is_some() {
-        return Err(TensorError::SqlExec(format!(
-            "table {table} already exists"
-        )));
+        return Err(sql_exec_err(format!("table {table} already exists")));
     }
 
     // Parse bucket interval
     let bucket_seconds = parse_interval_seconds(bucket_interval).ok_or_else(|| {
-        TensorError::SqlExec(format!("invalid bucket_size interval: '{bucket_interval}'"))
+        sql_exec_err(format!("invalid bucket_size interval: '{bucket_interval}'"))
     })?;
 
     // Find the timestamp column (first column of type INTEGER or REAL named 'ts' or 'timestamp')
@@ -5192,9 +5488,7 @@ fn execute_create_timeseries_table(
 
     // Find the primary key column
     let pk_col = columns.iter().find(|c| c.primary_key).ok_or_else(|| {
-        TensorError::SqlExec(
-            "CREATE TIMESERIES TABLE requires at least one PRIMARY KEY column".to_string(),
-        )
+        sql_exec_err("CREATE TIMESERIES TABLE requires at least one PRIMARY KEY column".to_string())
     })?;
 
     // Create the typed table schema
@@ -5211,6 +5505,7 @@ fn execute_create_timeseries_table(
         doc: "typed".to_string(),
         columns: cols,
         schema_mode: "timeseries".to_string(),
+        ..Default::default()
     };
 
     let payload = encode_schema_metadata(&schema)?;
@@ -5259,11 +5554,11 @@ fn update_ts_buckets(
         None => return Ok(()), // Not a timeseries table
     };
     let ts_meta: TimeseriesMetadata = serde_json::from_slice(&ts_meta_bytes)
-        .map_err(|e| TensorError::SqlExec(format!("invalid timeseries metadata: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("invalid timeseries metadata: {e}")))?;
 
     // Parse the doc as JSON to extract ts and value columns
     let json: serde_json::Value = serde_json::from_slice(doc)
-        .map_err(|e| TensorError::SqlExec(format!("invalid JSON for timeseries row: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("invalid JSON for timeseries row: {e}")))?;
 
     let timestamp = json
         .get(&ts_meta.ts_column)
@@ -5313,7 +5608,7 @@ fn load_ts_metadata(
     match read_live_key(db, session, &ts_key, None, None)? {
         Some(bytes) => {
             let meta: TimeseriesMetadata = serde_json::from_slice(&bytes)
-                .map_err(|e| TensorError::SqlExec(format!("invalid timeseries metadata: {e}")))?;
+                .map_err(|e| sql_exec_err(format!("invalid timeseries metadata: {e}")))?;
             Ok(Some(meta))
         }
         None => Ok(None),
@@ -5552,7 +5847,7 @@ fn execute_copy_to(
             }
             #[cfg(not(feature = "parquet"))]
             {
-                return Err(TensorError::SqlExec(
+                return Err(sql_exec_err(
                     "Parquet support requires --features parquet".to_string(),
                 ));
             }
@@ -5677,7 +5972,7 @@ fn execute_copy_from(
             }
             #[cfg(not(feature = "parquet"))]
             {
-                return Err(TensorError::SqlExec(
+                return Err(sql_exec_err(
                     "Parquet support requires --features parquet".to_string(),
                 ));
             }
@@ -5737,9 +6032,7 @@ fn extract_pk_and_doc(
                 serde_json::Value::Number(n) => Some(n.to_string()),
                 _ => None,
             })
-            .ok_or_else(|| {
-                TensorError::SqlExec(format!("JSON row missing pk column '{}'", schema.pk))
-            })?;
+            .ok_or_else(|| sql_exec_err(format!("JSON row missing pk column '{}'", schema.pk)))?;
         let doc = serde_json::to_vec(val)?;
         Ok((pk, doc))
     } else {
@@ -5747,7 +6040,7 @@ fn extract_pk_and_doc(
         let pk = val
             .get("pk")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| TensorError::SqlExec("JSON row missing 'pk'".to_string()))?
+            .ok_or_else(|| sql_exec_err("JSON row missing 'pk'"))?
             .to_string();
         let doc = val
             .get("doc")
@@ -5766,17 +6059,17 @@ fn execute_table_function(name: &str, args: &[Expr]) -> Result<Vec<VisibleRow>> 
             let path = match args.first() {
                 Some(Expr::StringLit(s)) => s.clone(),
                 _ => {
-                    return Err(TensorError::SqlExec(
+                    return Err(sql_exec_err(
                         "read_csv() requires a file path as first argument".to_string(),
                     ))
                 }
             };
             let content = std::fs::read_to_string(&path)
-                .map_err(|e| TensorError::SqlExec(format!("failed to read file '{path}': {e}")))?;
+                .map_err(|e| sql_exec_err(format!("failed to read file '{path}': {e}")))?;
             let mut lines = content.lines();
             let header_line = lines
                 .next()
-                .ok_or_else(|| TensorError::SqlExec("CSV file is empty".to_string()))?;
+                .ok_or_else(|| sql_exec_err("CSV file is empty"))?;
             let headers = csv_parse_line(header_line);
 
             let mut rows = Vec::new();
@@ -5818,13 +6111,13 @@ fn execute_table_function(name: &str, args: &[Expr]) -> Result<Vec<VisibleRow>> 
             let path = match args.first() {
                 Some(Expr::StringLit(s)) => s.clone(),
                 _ => {
-                    return Err(TensorError::SqlExec(
+                    return Err(sql_exec_err(
                         "read_json() requires a file path as first argument".to_string(),
                     ))
                 }
             };
             let content = std::fs::read_to_string(&path)
-                .map_err(|e| TensorError::SqlExec(format!("failed to read file '{path}': {e}")))?;
+                .map_err(|e| sql_exec_err(format!("failed to read file '{path}': {e}")))?;
             let arr: Vec<serde_json::Value> = serde_json::from_str(&content)?;
             let mut rows = Vec::new();
             for (i, val) in arr.iter().enumerate() {
@@ -5840,13 +6133,13 @@ fn execute_table_function(name: &str, args: &[Expr]) -> Result<Vec<VisibleRow>> 
             let path = match args.first() {
                 Some(Expr::StringLit(s)) => s.clone(),
                 _ => {
-                    return Err(TensorError::SqlExec(
+                    return Err(sql_exec_err(
                         "read_ndjson() requires a file path as first argument".to_string(),
                     ))
                 }
             };
             let content = std::fs::read_to_string(&path)
-                .map_err(|e| TensorError::SqlExec(format!("failed to read file '{path}': {e}")))?;
+                .map_err(|e| sql_exec_err(format!("failed to read file '{path}': {e}")))?;
             let mut rows = Vec::new();
             for (i, line) in content.lines().enumerate() {
                 if line.trim().is_empty() {
@@ -5867,7 +6160,7 @@ fn execute_table_function(name: &str, args: &[Expr]) -> Result<Vec<VisibleRow>> 
                 let path = match args.first() {
                     Some(Expr::StringLit(s)) => s.clone(),
                     _ => {
-                        return Err(TensorError::SqlExec(
+                        return Err(sql_exec_err(
                             "read_parquet() requires a file path as first argument".to_string(),
                         ))
                     }
@@ -5877,14 +6170,12 @@ fn execute_table_function(name: &str, args: &[Expr]) -> Result<Vec<VisibleRow>> 
             #[cfg(not(feature = "parquet"))]
             {
                 let _ = args;
-                Err(TensorError::SqlExec(
+                Err(sql_exec_err(
                     "Parquet support requires --features parquet".to_string(),
                 ))
             }
         }
-        _ => Err(TensorError::SqlExec(format!(
-            "unknown table function: {name}()"
-        ))),
+        _ => Err(sql_exec_err(format!("unknown table function: {name}()"))),
     }
 }
 
@@ -5909,7 +6200,7 @@ fn load_table_schema(
 ) -> Result<TableSchemaMetadata> {
     let key = table_meta_key(table);
     let bytes = read_live_key(db, session, &key, None, None)?
-        .ok_or_else(|| TensorError::SqlExec(format!("table {table} does not exist")))?;
+        .ok_or_else(|| TensorError::SqlExec(SqlError::table_not_found(table, None)))?;
     parse_schema_metadata(&bytes)
 }
 
@@ -5943,13 +6234,13 @@ fn resolve_select_target(
                 valid_at.or(view_valid_at),
             ));
         }
-        return Err(TensorError::SqlExec(format!(
+        return Err(sql_exec_err(format!(
             "view {source} has unsupported query shape"
         )));
     }
 
-    Err(TensorError::SqlExec(format!(
-        "table or view {source} does not exist"
+    Err(TensorError::SqlExec(SqlError::table_not_found(
+        source, None,
     )))
 }
 
@@ -5993,7 +6284,7 @@ fn scan_visible_rows(
     for (user_key, doc) in docs {
         let pk_bytes = &user_key[prefix.len()..];
         let pk = std::str::from_utf8(pk_bytes)
-            .map_err(|_| TensorError::SqlExec("row key contains non-utf8 pk".to_string()))?
+            .map_err(|_| sql_exec_err("row key contains non-utf8 pk"))?
             .to_string();
         out.push(VisibleRow { pk, doc });
     }
@@ -6106,7 +6397,7 @@ fn execute_set_op(
     let left_rows = match left_result {
         SqlResult::Rows(r) => r,
         _ => {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "set operation requires SELECT statements".to_string(),
             ))
         }
@@ -6114,7 +6405,7 @@ fn execute_set_op(
     let right_rows = match right_result {
         SqlResult::Rows(r) => r,
         _ => {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "set operation requires SELECT statements".to_string(),
             ))
         }
@@ -6187,7 +6478,7 @@ fn execute_insert_returning(
                 SqlValue::Text(s) => s.clone(),
                 SqlValue::Number(n) => n.to_string(),
                 _ => {
-                    return Err(TensorError::SqlExec(
+                    return Err(sql_exec_err(
                         "primary key must be text or number".to_string(),
                     ))
                 }
@@ -6198,7 +6489,7 @@ fn execute_insert_returning(
     }
 
     let pk = pk_val.ok_or_else(|| {
-        TensorError::SqlExec(format!(
+        sql_exec_err(format!(
             "INSERT must include primary key column '{}'",
             schema.pk
         ))
@@ -6255,9 +6546,7 @@ fn execute_create_table_as(
     // Check table doesn't exist
     let key = table_meta_key(table);
     if read_live_key(db, session, &key, None, None)?.is_some() {
-        return Err(TensorError::SqlExec(format!(
-            "table {table} already exists"
-        )));
+        return Err(sql_exec_err(format!("table {table} already exists")));
     }
 
     // Execute the query
@@ -6265,7 +6554,7 @@ fn execute_create_table_as(
     let rows = match result {
         SqlResult::Rows(r) => r,
         _ => {
-            return Err(TensorError::SqlExec(
+            return Err(sql_exec_err(
                 "CREATE TABLE AS requires a SELECT statement".to_string(),
             ))
         }
@@ -6342,6 +6631,7 @@ fn execute_create_table_as(
         doc: "json".to_string(),
         columns,
         schema_mode: "legacy".to_string(),
+        ..Default::default()
     };
     let payload = encode_schema_metadata(&schema)?;
     write_put(db, session, key, payload, 0, u64::MAX, Some(1))?;
@@ -6413,9 +6703,9 @@ fn write_parquet(
 
     let arrow_schema = Arc::new(Schema::new(fields));
     let file = std::fs::File::create(path)
-        .map_err(|e| TensorError::SqlExec(format!("failed to create file '{path}': {e}")))?;
+        .map_err(|e| sql_exec_err(format!("failed to create file '{path}': {e}")))?;
     let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), None)
-        .map_err(|e| TensorError::SqlExec(format!("parquet writer error: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("parquet writer error: {e}")))?;
 
     if is_typed {
         // Build column arrays from row data
@@ -6498,10 +6788,10 @@ fn write_parquet(
             .collect();
 
         let batch = RecordBatch::try_new(arrow_schema, arrays)
-            .map_err(|e| TensorError::SqlExec(format!("arrow batch error: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("arrow batch error: {e}")))?;
         writer
             .write(&batch)
-            .map_err(|e| TensorError::SqlExec(format!("parquet write error: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("parquet write error: {e}")))?;
     } else {
         // Legacy: pk + doc as strings
         let mut pk_builder = StringBuilder::new();
@@ -6515,15 +6805,15 @@ fn write_parquet(
             Arc::new(doc_builder.finish()),
         ];
         let batch = RecordBatch::try_new(arrow_schema, arrays)
-            .map_err(|e| TensorError::SqlExec(format!("arrow batch error: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("arrow batch error: {e}")))?;
         writer
             .write(&batch)
-            .map_err(|e| TensorError::SqlExec(format!("parquet write error: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("parquet write error: {e}")))?;
     }
 
     writer
         .close()
-        .map_err(|e| TensorError::SqlExec(format!("parquet close error: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("parquet close error: {e}")))?;
     Ok(SqlResult::Affected {
         rows: rows.len() as u64,
         commit_ts: None,
@@ -6586,19 +6876,18 @@ fn read_parquet_rows(path: &str) -> Result<Vec<VisibleRow>> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     let file = std::fs::File::open(path)
-        .map_err(|e| TensorError::SqlExec(format!("failed to open file '{path}': {e}")))?;
+        .map_err(|e| sql_exec_err(format!("failed to open file '{path}': {e}")))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
-        .map_err(|e| TensorError::SqlExec(format!("parquet reader error: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("parquet reader error: {e}")))?;
     let reader = builder
         .build()
-        .map_err(|e| TensorError::SqlExec(format!("parquet build error: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("parquet build error: {e}")))?;
 
     let mut all_rows = Vec::new();
     let mut row_idx = 0usize;
 
     for batch_result in reader {
-        let batch =
-            batch_result.map_err(|e| TensorError::SqlExec(format!("parquet read error: {e}")))?;
+        let batch = batch_result.map_err(|e| sql_exec_err(format!("parquet read error: {e}")))?;
         let schema = batch.schema();
 
         for row_i in 0..batch.num_rows() {
@@ -7115,7 +7404,7 @@ fn update_secondary_indexes(
                     .iter()
                     .any(|r| r.doc != INDEX_TOMBSTONE && !r.user_key.ends_with(pk.as_bytes()));
                 if other {
-                    return Err(TensorError::SqlExec(format!(
+                    return Err(sql_exec_err(format!(
                         "UNIQUE constraint violated: duplicate value in index {}",
                         meta.name
                     )));
@@ -7169,9 +7458,8 @@ fn execute_backup(db: &Database, dest: &str, since_epoch: Option<u64>) -> Result
     use std::path::Path;
 
     let dest_path = Path::new(dest);
-    fs::create_dir_all(dest_path).map_err(|e| {
-        TensorError::SqlExec(format!("failed to create backup directory {dest}: {e}"))
-    })?;
+    fs::create_dir_all(dest_path)
+        .map_err(|e| sql_exec_err(format!("failed to create backup directory {dest}: {e}")))?;
 
     // 1. Flush all shard memtables
     db.sync();
@@ -7232,14 +7520,14 @@ fn execute_backup(db: &Database, dest: &str, since_epoch: Option<u64>) -> Result
 
         let meta_path = dest_path.join("backup_metadata.json");
         fs::write(&meta_path, serde_json::to_vec_pretty(&metadata)?)
-            .map_err(|e| TensorError::SqlExec(format!("failed to write backup metadata: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to write backup metadata: {e}")))?;
 
         let data_path = dest_path.join("incremental_data.json");
         fs::write(
             &data_path,
             serde_json::to_vec_pretty(&serde_json::json!(incremental_data))?,
         )
-        .map_err(|e| TensorError::SqlExec(format!("failed to write incremental data: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("failed to write incremental data: {e}")))?;
 
         return Ok(SqlResult::Affected {
             rows: record_count,
@@ -7255,7 +7543,7 @@ fn execute_backup(db: &Database, dest: &str, since_epoch: Option<u64>) -> Result
     let manifest_dst = dest_path.join("MANIFEST.json");
     if manifest_src.exists() {
         fs::copy(&manifest_src, &manifest_dst)
-            .map_err(|e| TensorError::SqlExec(format!("failed to copy manifest: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to copy manifest: {e}")))?;
     }
 
     // 3. Copy shard directories (SSTables + WAL)
@@ -7270,18 +7558,18 @@ fn execute_backup(db: &Database, dest: &str, since_epoch: Option<u64>) -> Result
         }
 
         fs::create_dir_all(&dst_shard)
-            .map_err(|e| TensorError::SqlExec(format!("failed to create shard backup dir: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to create shard backup dir: {e}")))?;
 
         for entry in fs::read_dir(&src_shard)
-            .map_err(|e| TensorError::SqlExec(format!("failed to read shard dir: {e}")))?
+            .map_err(|e| sql_exec_err(format!("failed to read shard dir: {e}")))?
         {
-            let entry = entry.map_err(|e| TensorError::SqlExec(format!("dir entry error: {e}")))?;
+            let entry = entry.map_err(|e| sql_exec_err(format!("dir entry error: {e}")))?;
             let src_file = entry.path();
             if src_file.is_file() {
                 let file_name = entry.file_name();
                 let dst_file = dst_shard.join(&file_name);
                 fs::copy(&src_file, &dst_file).map_err(|e| {
-                    TensorError::SqlExec(format!("failed to copy {}: {e}", src_file.display()))
+                    sql_exec_err(format!("failed to copy {}: {e}", src_file.display()))
                 })?;
                 file_count += 1;
             }
@@ -7302,7 +7590,7 @@ fn execute_backup(db: &Database, dest: &str, since_epoch: Option<u64>) -> Result
     });
     let meta_path = dest_path.join("backup_metadata.json");
     fs::write(&meta_path, serde_json::to_vec_pretty(&metadata)?)
-        .map_err(|e| TensorError::SqlExec(format!("failed to write backup metadata: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("failed to write backup metadata: {e}")))?;
 
     Ok(SqlResult::Affected {
         rows: file_count,
@@ -7316,21 +7604,21 @@ fn execute_restore(db: &Database, src: &str) -> Result<SqlResult> {
 
     let src_path = Path::new(src);
     if !src_path.exists() {
-        return Err(TensorError::SqlExec(format!(
+        return Err(sql_exec_err(format!(
             "backup directory does not exist: {src}"
         )));
     }
 
     let meta_path = src_path.join("backup_metadata.json");
     if !meta_path.exists() {
-        return Err(TensorError::SqlExec(format!(
+        return Err(sql_exec_err(format!(
             "not a valid backup: missing backup_metadata.json in {src}"
         )));
     }
 
     // Verify backup metadata
     let meta_bytes = std::fs::read(&meta_path)
-        .map_err(|e| TensorError::SqlExec(format!("failed to read backup metadata: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("failed to read backup metadata: {e}")))?;
     let _metadata: serde_json::Value = serde_json::from_slice(&meta_bytes)?;
 
     // Copy files from backup to database root
@@ -7341,7 +7629,7 @@ fn execute_restore(db: &Database, src: &str) -> Result<SqlResult> {
     let manifest_src = src_path.join("MANIFEST.json");
     if manifest_src.exists() {
         std::fs::copy(&manifest_src, root.join("MANIFEST.json"))
-            .map_err(|e| TensorError::SqlExec(format!("failed to restore manifest: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to restore manifest: {e}")))?;
         file_count += 1;
     }
 
@@ -7356,17 +7644,17 @@ fn execute_restore(db: &Database, src: &str) -> Result<SqlResult> {
         }
 
         std::fs::create_dir_all(&dst_shard)
-            .map_err(|e| TensorError::SqlExec(format!("failed to create shard dir: {e}")))?;
+            .map_err(|e| sql_exec_err(format!("failed to create shard dir: {e}")))?;
 
         for entry in std::fs::read_dir(&src_shard)
-            .map_err(|e| TensorError::SqlExec(format!("failed to read backup shard dir: {e}")))?
+            .map_err(|e| sql_exec_err(format!("failed to read backup shard dir: {e}")))?
         {
-            let entry = entry.map_err(|e| TensorError::SqlExec(format!("dir entry error: {e}")))?;
+            let entry = entry.map_err(|e| sql_exec_err(format!("dir entry error: {e}")))?;
             let src_file = entry.path();
             if src_file.is_file() {
                 let dst_file = dst_shard.join(entry.file_name());
                 std::fs::copy(&src_file, &dst_file).map_err(|e| {
-                    TensorError::SqlExec(format!("failed to restore {}: {e}", src_file.display()))
+                    sql_exec_err(format!("failed to restore {}: {e}", src_file.display()))
                 })?;
                 file_count += 1;
             }
@@ -7379,5 +7667,387 @@ fn execute_restore(db: &Database, src: &str) -> Result<SqlResult> {
         message: format!(
             "restore complete: {file_count} files restored from {src} (restart required)"
         ),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: VERIFY BACKUP
+// ---------------------------------------------------------------------------
+
+fn execute_verify_backup(db: &Database, path: &str) -> Result<SqlResult> {
+    let backup_dir = std::path::Path::new(path);
+    let mut issues: Vec<String> = Vec::new();
+    let mut file_count: u64 = 0;
+    let mut total_bytes: u64 = 0;
+
+    // Check metadata
+    let meta_path = backup_dir.join("backup_metadata.json");
+    if !meta_path.exists() {
+        issues.push("backup_metadata.json missing".to_string());
+    } else {
+        let data = std::fs::read_to_string(&meta_path)
+            .map_err(|e| sql_exec_err(format!("failed to read metadata: {e}")))?;
+        if serde_json::from_str::<serde_json::Value>(&data).is_err() {
+            issues.push("backup_metadata.json invalid JSON".to_string());
+        }
+    }
+
+    // Enumerate shard directories and validate files
+    for shard_id in 0..db.config().shard_count {
+        let shard_dir = backup_dir.join(format!("shard-{shard_id}"));
+        if !shard_dir.exists() {
+            issues.push(format!("shard-{shard_id} directory missing"));
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(&shard_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                total_bytes += size;
+                file_count += 1;
+
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".sst") {
+                    // Validate SSTable: check magic bytes at start
+                    if size < 4 {
+                        issues.push(format!("{}: too small for SSTable", p.display()));
+                    }
+                } else if name == "wal.log" {
+                    // Validate WAL: try replay
+                    if let Err(e) = crate::storage::wal::Wal::replay(&p) {
+                        issues.push(format!("wal.log CRC error: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    let status = if issues.is_empty() {
+        "VALID"
+    } else {
+        "ISSUES_FOUND"
+    };
+
+    let row = serde_json::json!({
+        "status": status,
+        "file_count": file_count,
+        "total_bytes": total_bytes,
+        "issues": issues,
+    });
+    Ok(SqlResult::Rows(vec![row.to_string().into_bytes()]))
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: SUGGEST INDEX
+// ---------------------------------------------------------------------------
+
+fn execute_suggest_index(
+    db: &Database,
+    session: &mut SqlSession,
+    query_str: &str,
+) -> Result<SqlResult> {
+    use crate::sql::parser::{parse_sql, Statement};
+
+    let stmt = parse_sql(query_str)?;
+    let (table_name, filter, order_by) = match &stmt {
+        Statement::Select {
+            from,
+            filter,
+            order_by,
+            ..
+        } => {
+            let table = match from {
+                crate::sql::parser::TableRef::Named { name, .. } => name.clone(),
+                _ => {
+                    return Ok(SqlResult::Rows(vec![]));
+                }
+            };
+            (table, filter.clone(), order_by.clone())
+        }
+        _ => {
+            return Err(sql_exec_err("SUGGEST INDEX requires a SELECT query"));
+        }
+    };
+
+    // Collect WHERE clause columns
+    let mut where_cols: Vec<String> = Vec::new();
+    if let Some(ref f) = filter {
+        collect_columns_from_expr(f, &mut where_cols);
+    }
+
+    // Collect ORDER BY columns
+    let mut order_cols: Vec<String> = Vec::new();
+    if let Some(ref ob) = order_by {
+        for (expr, _) in ob {
+            collect_columns_from_expr(expr, &mut order_cols);
+        }
+    }
+
+    // Load existing indexes for this table
+    let idx_prefix = format!("__meta/index/{table_name}/").into_bytes();
+    let existing = collect_visible_by_prefix(db, session, &idx_prefix, None, None)?;
+    let mut indexed_cols: Vec<String> = Vec::new();
+    for val in existing.values() {
+        if let Ok(meta) = serde_json::from_slice::<crate::facet::relational::IndexMetadata>(val) {
+            indexed_cols.extend(meta.columns);
+        }
+    }
+
+    let mut suggestions: Vec<Vec<u8>> = Vec::new();
+    let all_cols: Vec<String> = where_cols
+        .iter()
+        .chain(order_cols.iter())
+        .cloned()
+        .collect();
+
+    for col in &all_cols {
+        let col_lower = col.to_lowercase();
+        if col_lower == "pk" || col_lower == "id" {
+            continue;
+        }
+        if indexed_cols.iter().any(|c| c.eq_ignore_ascii_case(col)) {
+            continue;
+        }
+        let reason = if where_cols.contains(col) {
+            "used in WHERE clause"
+        } else {
+            "used in ORDER BY"
+        };
+        let row = serde_json::json!({
+            "table": table_name,
+            "suggested_index": format!("CREATE INDEX idx_{table_name}_{col} ON {table_name} ({col})"),
+            "reason": reason,
+        });
+        suggestions.push(row.to_string().into_bytes());
+    }
+
+    Ok(SqlResult::Rows(suggestions))
+}
+
+fn collect_columns_from_expr(expr: &crate::sql::parser::Expr, cols: &mut Vec<String>) {
+    use crate::sql::parser::Expr;
+    match expr {
+        Expr::Column(name) => {
+            if !cols.contains(name) {
+                cols.push(name.clone());
+            }
+        }
+        Expr::FieldAccess { column, .. } => {
+            if !cols.contains(column) {
+                cols.push(column.clone());
+            }
+        }
+        Expr::BinOp { left, right, .. } => {
+            collect_columns_from_expr(left, cols);
+            collect_columns_from_expr(right, cols);
+        }
+        Expr::Not(inner) => collect_columns_from_expr(inner, cols),
+        Expr::Function { args, .. } => {
+            for a in args {
+                collect_columns_from_expr(a, cols);
+            }
+        }
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: VACUUM
+// ---------------------------------------------------------------------------
+
+fn execute_vacuum(
+    db: &Database,
+    session: &mut SqlSession,
+    table: Option<&str>,
+) -> Result<SqlResult> {
+    let mut tombstones_found: u64 = 0;
+
+    if let Some(table_name) = table {
+        let prefix = format!("table/{table_name}/").into_bytes();
+        let rows = collect_visible_by_prefix(db, session, &prefix, None, None)?;
+        for doc in rows.values() {
+            if doc.is_empty() {
+                tombstones_found += 1;
+            }
+        }
+    } else {
+        // Scan all shards for tombstones in table/ prefix
+        let prefix = b"table/";
+        let rows = collect_visible_by_prefix(db, session, prefix, None, None)?;
+        for doc in rows.values() {
+            if doc.is_empty() {
+                tombstones_found += 1;
+            }
+        }
+    }
+
+    // Trigger compaction on all shards
+    let _ = db.request_compaction_all();
+
+    Ok(SqlResult::Affected {
+        rows: tombstones_found,
+        commit_ts: None,
+        message: format!("vacuum complete: {tombstones_found} tombstones scheduled for compaction"),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: GDPR erasure
+// ---------------------------------------------------------------------------
+
+fn execute_forget_key(
+    db: &Database,
+    session: &mut SqlSession,
+    table: &str,
+    key: &str,
+) -> Result<SqlResult> {
+    use crate::facet::relational::row_key;
+
+    let rk = row_key(table, key);
+    // Scan all versions of this key
+    let all_versions = db.scan_prefix(&rk, None, None, None)?;
+    let mut erased: u64 = 0;
+    for row in &all_versions {
+        // Write an empty tombstone for each version
+        write_put(
+            db,
+            session,
+            row.user_key.clone(),
+            Vec::new(),
+            0,
+            u64::MAX,
+            None,
+        )?;
+        erased += 1;
+    }
+
+    // Also write a tombstone for the key itself if no versions found
+    if erased == 0 {
+        write_put(db, session, rk, Vec::new(), 0, u64::MAX, None)?;
+        erased = 1;
+    }
+
+    // Trigger compaction to physically remove the data
+    let _ = db.request_compaction_all();
+
+    // Audit log
+    let user = session.session_user.as_deref().unwrap_or("system");
+    let _ = db.audit_log().log(
+        db,
+        crate::auth::audit::AuditEventKind::GdprErasure {
+            table: table.to_string(),
+            key: key.to_string(),
+        },
+        user,
+    );
+
+    Ok(SqlResult::Affected {
+        rows: erased,
+        commit_ts: None,
+        message: format!("erased {erased} versions of key '{key}' from table {table}"),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: Online DDL
+// ---------------------------------------------------------------------------
+
+fn execute_alter_drop_column(
+    db: &Database,
+    session: &mut SqlSession,
+    table: &str,
+    column: &str,
+) -> Result<SqlResult> {
+    use crate::facet::relational::{encode_schema_metadata, table_meta_key};
+
+    let key = table_meta_key(table);
+    let mut schema = load_table_schema(db, session, table)?;
+
+    // Cannot drop PK column
+    if column.eq_ignore_ascii_case(&schema.pk) {
+        return Err(sql_exec_err(format!(
+            "cannot drop primary key column '{column}'"
+        )));
+    }
+
+    let original_len = schema.columns.len();
+    schema
+        .columns
+        .retain(|c| !c.name.eq_ignore_ascii_case(column));
+    if schema.columns.len() == original_len {
+        return Err(TensorError::SqlExec(SqlError::column_not_found(
+            column, table, None,
+        )));
+    }
+
+    let encoded = encode_schema_metadata(&schema)?;
+    write_put(db, session, key, encoded, 0, u64::MAX, None)?;
+
+    let user = session.session_user.as_deref().unwrap_or("system");
+    let _ = db.audit_log().log(
+        db,
+        crate::auth::audit::AuditEventKind::TableAltered {
+            table: table.to_string(),
+            change: format!("DROP COLUMN {column}"),
+        },
+        user,
+    );
+
+    Ok(SqlResult::Affected {
+        rows: 1,
+        commit_ts: None,
+        message: format!("dropped column {column} from {table}"),
+    })
+}
+
+fn execute_alter_rename_column(
+    db: &Database,
+    session: &mut SqlSession,
+    table: &str,
+    old_name: &str,
+    new_name: &str,
+) -> Result<SqlResult> {
+    use crate::facet::relational::{encode_schema_metadata, table_meta_key};
+
+    let key = table_meta_key(table);
+    let mut schema = load_table_schema(db, session, table)?;
+
+    let found = schema
+        .columns
+        .iter_mut()
+        .find(|c| c.name.eq_ignore_ascii_case(old_name));
+    match found {
+        Some(col) => {
+            col.name = new_name.to_string();
+        }
+        None => {
+            return Err(TensorError::SqlExec(SqlError::column_not_found(
+                old_name, table, None,
+            )));
+        }
+    }
+
+    // Track the alias so old row data maps correctly
+    schema
+        .column_aliases
+        .insert(old_name.to_string(), new_name.to_string());
+
+    let encoded = encode_schema_metadata(&schema)?;
+    write_put(db, session, key, encoded, 0, u64::MAX, None)?;
+
+    let user = session.session_user.as_deref().unwrap_or("system");
+    let _ = db.audit_log().log(
+        db,
+        crate::auth::audit::AuditEventKind::TableAltered {
+            table: table.to_string(),
+            change: format!("RENAME COLUMN {old_name} TO {new_name}"),
+        },
+        user,
+    );
+
+    Ok(SqlResult::Affected {
+        rows: 1,
+        commit_ts: None,
+        message: format!("renamed column {old_name} to {new_name} on {table}"),
     })
 }

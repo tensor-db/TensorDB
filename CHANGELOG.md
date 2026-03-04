@@ -2,6 +2,87 @@
 
 All notable changes to TensorDB are documented in this file.
 
+## [0.32] — Error Quality, Security & Audit, Operational Maturity
+
+### Added
+
+#### Phase 2: Error Quality & Developer Experience
+- **Structured error codes** — `ErrorCode` enum with stable numeric codes (`T1001` syntax, `T2001` table not found, `T2002` column not found, `T3001` not-null violation, `T4003` query timeout, `T6001` permission denied) and `SqlError` struct with code, message, suggestion, and position fields
+- **"Did you mean?" suggestions** — Levenshtein-based fuzzy matching for misspelled table names via `suggest_closest()` with configurable max edit distance; suggestions embedded in `SqlError.suggestion` field
+- **`SUGGEST INDEX FOR '<query>'`** — Analyzes a query's WHERE, JOIN, and ORDER BY columns against existing indexes and recommends `CREATE INDEX` statements for unindexed columns
+- **`SET` statement** — Session-level variables: `SET STRICT_MODE = ON|OFF`, `SET QUERY_TIMEOUT = <ms>`, `SET QUERY_MAX_MEMORY = <bytes>`, `SET COMPACTION_WINDOW = 'HH:MM-HH:MM'`
+- **`VERIFY BACKUP '<path>'`** — Validates backup integrity (metadata, file enumeration, SSTable format, WAL CRC) without restoring; returns status (VALID/ISSUES_FOUND), file count, total bytes, and issue list
+- **`VACUUM [table]`** — Scans for tombstones (empty-value records), triggers compaction to physically remove them, reports tombstone count
+- `levenshtein()` and `suggest_closest()` public utility functions in `error.rs`
+- `sql_parse_err()` and `sql_exec_err()` migration helpers for ergonomic error construction
+
+#### Phase 3: Security & Audit
+- **Audit log** (`auth/audit.rs`) — Append-only audit log under `__audit_log/` prefix tracking DDL changes (table/index/view create/drop), auth events, policy changes, and GDPR erasures; queryable via `SHOW AUDIT LOG [LIMIT n]`
+- **Row-level security** (`auth/rls.rs`) — `CREATE POLICY <name> ON <table> FOR <op> [TO <role>, ...] USING (<expr>)` and `DROP POLICY <name> ON <table>` for per-row access control with `PolicyOperation` (Select/Insert/Update/Delete/All) and role-based filtering
+- **GDPR erasure** — `FORGET KEY '<key>' FROM <table>` tombstones all temporal versions of a record and triggers compaction; records erasure in the audit log
+
+#### Phase 4: Operational Maturity
+- **Per-query resource limits** — `SET QUERY_TIMEOUT = <ms>` and `SET QUERY_MAX_MEMORY = <bytes>` with `SqlError::query_timeout()` and `SqlError::memory_limit()` error constructors (codes `T4003`/`T4004`)
+- **Online DDL** — `ALTER TABLE <t> DROP COLUMN <c>` (metadata-only, excludes column from projections) and `ALTER TABLE <t> RENAME COLUMN <old> TO <new>` (updates metadata with `column_aliases` map for backward-compatible reads)
+- **Plan stability** — `CREATE PLAN GUIDE '<name>' FOR '<sql>' USING '<hints>'`, `DROP PLAN GUIDE '<name>'`, `SHOW PLAN GUIDES` with storage under `__meta/plan_guide/` prefix
+- **Backup dry-run** — `RESTORE DATABASE FROM '<path>' DRY_RUN` validates a backup without writing data, returning status, file count, total bytes, and issues
+- **Compaction scheduling** — `SET COMPACTION_WINDOW = 'HH:MM-HH:MM'` to restrict compaction to off-peak hours; `compaction_window_start_hour`/`compaction_window_end_hour` config fields
+- **WAL management** — `SHOW WAL STATUS` returns per-shard WAL file size, shard ID, and last flush info; `wal_archive_enabled`, `wal_archive_dir`, `wal_retention_count`, `wal_max_bytes` config fields
+
+#### New SQL Commands
+- `SET <variable> = <value>` — session-level configuration
+- `SUGGEST INDEX FOR '<query>'` — index recommendation
+- `VERIFY BACKUP '<path>'` — backup validation
+- `VACUUM [table]` — tombstone cleanup
+- `FORGET KEY '<key>' FROM <table>` — GDPR erasure
+- `CREATE POLICY ... ON ... FOR ... USING (...)` — row-level security
+- `DROP POLICY <name> ON <table>` — remove RLS policy
+- `CREATE PLAN GUIDE ... FOR ... USING ...` — plan stability
+- `DROP PLAN GUIDE '<name>'` — remove plan guide
+- `SHOW WAL STATUS` — WAL monitoring
+- `SHOW AUDIT LOG [LIMIT n]` — audit trail
+- `SHOW PLAN GUIDES` — list plan guides
+- `ALTER TABLE <t> DROP COLUMN <c>` — online DDL
+- `ALTER TABLE <t> RENAME COLUMN <old> TO <new>` — online DDL
+- `RESTORE ... DRY_RUN` — backup dry-run
+
+#### New Modules
+- `crates/tensordb-core/src/auth/audit.rs` — AuditLog, AuditEvent, AuditEventKind
+- `crates/tensordb-core/src/auth/rls.rs` — PolicyManager, RowPolicy, PolicyOperation
+- `crates/tensordb-core/src/sql/plan_guide.rs` — PlanGuideManager, PlanGuide
+
+#### New Test Suites (15 files, 47 tests)
+- `tests/error_codes.rs` — structured error code verification
+- `tests/suggestions.rs` — Levenshtein fuzzy matching
+- `tests/strict_mode.rs` — strict mode and SET statement
+- `tests/vacuum.rs` — VACUUM tombstone cleanup
+- `tests/verify_backup.rs` — backup verification
+- `tests/suggest_index.rs` — index recommendation
+- `tests/audit_log.rs` — audit log recording and querying
+- `tests/row_level_security.rs` — RLS policy CRUD
+- `tests/gdpr_erasure.rs` — FORGET KEY erasure
+- `tests/resource_limits.rs` — query timeout and memory limits
+- `tests/online_ddl.rs` — DROP/RENAME COLUMN
+- `tests/plan_stability.rs` — plan guide CRUD
+- `tests/backup_dry_run.rs` — RESTORE DRY_RUN
+- `tests/compaction_scheduling.rs` — compaction window
+- `tests/wal_management.rs` — SHOW WAL STATUS
+
+### Changed
+- `TensorError::SqlParse(String)` → `TensorError::SqlParse(SqlError)` with structured error codes
+- `TensorError::SqlExec(String)` → `TensorError::SqlExec(SqlError)` with structured error codes
+- 240+ error construction sites migrated to use `sql_parse_err()`/`sql_exec_err()` helpers
+- `Database` struct extended with `audit_log` and `compaction_window` fields
+- `SqlSession` extended with `session_user`, `session_roles`, `strict_mode`, `query_timeout_ms`, `query_max_memory_bytes`, `query_start`, `memory_used`
+- `ShardCommand` extended with `ForceCompaction` variant for VACUUM
+- `TableSchemaMetadata` extended with `column_aliases` field for RENAME COLUMN
+- `Statement::Restore` extended with `dry_run: bool` field
+- `Config` extended with `strict_mode`, `compaction_window_start_hour`, `compaction_window_end_hour`, `wal_archive_enabled`, `wal_archive_dir`, `wal_retention_count`, `wal_max_bytes`
+- `parse_show()` extended with WAL STATUS, AUDIT LOG, PLAN GUIDES
+- `parse_create()` extended with POLICY, PLAN GUIDE
+- `parse_drop()` extended with POLICY, PLAN GUIDE
+- `parse_alter()` extended with DROP COLUMN, RENAME COLUMN
+
 ## [0.31] — Observability & Diagnostics
 
 ### Added

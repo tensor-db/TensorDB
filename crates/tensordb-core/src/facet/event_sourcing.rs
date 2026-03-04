@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::engine::db::Database;
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 
 /// Key prefix for event store metadata.
 const EVENT_STORE_META_PREFIX: &str = "__es/meta/";
@@ -51,7 +51,7 @@ pub fn create_event_store(db: &Database, name: &str, snapshot_interval: Option<u
         snapshot_interval,
     };
     let value = serde_json::to_vec(&meta)
-        .map_err(|e| TensorError::SqlExec(format!("failed to serialize event store: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("failed to serialize event store: {e}")))?;
     db.put(key.as_bytes(), value, 0, u64::MAX, None)?;
     Ok(())
 }
@@ -62,7 +62,7 @@ pub fn get_event_store(db: &Database, name: &str) -> Result<Option<EventStoreMet
     match db.get(key.as_bytes(), None, None)? {
         Some(bytes) => {
             let meta: EventStoreMetadata = serde_json::from_slice(&bytes)
-                .map_err(|e| TensorError::SqlExec(format!("failed to parse event store: {e}")))?;
+                .map_err(|e| sql_exec_err(format!("failed to parse event store: {e}")))?;
             Ok(Some(meta))
         }
         None => Ok(None),
@@ -95,7 +95,7 @@ pub fn append_event(
     if let Some(idem_key) = idempotency_key {
         let idem_storage_key = format!("{}{}/{}", IDEMPOTENCY_PREFIX, store_name, idem_key);
         if let Some(_existing) = db.get(idem_storage_key.as_bytes(), None, None)? {
-            return Err(TensorError::SqlExec(format!(
+            return Err(sql_exec_err(format!(
                 "duplicate idempotency key: {idem_key}"
             )));
         }
@@ -119,7 +119,7 @@ pub fn append_event(
         EVENT_STORE_DATA_PREFIX, store_name, aggregate_id, seq_num
     );
     let event_value = serde_json::to_vec(&event)
-        .map_err(|e| TensorError::SqlExec(format!("failed to serialize event: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("failed to serialize event: {e}")))?;
     db.put(event_key.as_bytes(), event_value, 0, u64::MAX, None)?;
 
     // Store idempotency marker
@@ -232,7 +232,7 @@ pub fn save_snapshot(
     };
     let snap_key = format!("{}{}/{}/latest", SNAPSHOT_PREFIX, store_name, aggregate_id);
     let snap_value = serde_json::to_vec(&snap)
-        .map_err(|e| TensorError::SqlExec(format!("failed to serialize snapshot: {e}")))?;
+        .map_err(|e| sql_exec_err(format!("failed to serialize snapshot: {e}")))?;
     db.put(snap_key.as_bytes(), snap_value, 0, u64::MAX, None)?;
     Ok(())
 }

@@ -1,4 +1,4 @@
-use crate::error::{Result, TensorError};
+use crate::error::{sql_exec_err, Result};
 use crate::sql::parser::{BinOperator, Expr};
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -368,7 +368,7 @@ impl<'a> EvalContext<'a> {
                         Some(d) => Ok(SqlValue::Decimal(d)),
                         None => Ok(SqlValue::Null),
                     },
-                    _ => Err(TensorError::SqlExec(format!(
+                    _ => Err(sql_exec_err(format!(
                         "unsupported CAST target type: {target_type}"
                     ))),
                 }
@@ -1281,7 +1281,7 @@ fn eval_scalar_function(name: &str, args: &[Expr], ctx: &mut EvalContext) -> Res
                 let v1 = crate::facet::vector_persistence::parse_vector_literal(&v1_str)?;
                 let v2 = crate::facet::vector_persistence::parse_vector_literal(&v2_str)?;
                 if v1.len() != v2.len() {
-                    return Err(TensorError::SqlExec(
+                    return Err(sql_exec_err(
                         "VECTOR_DISTANCE: dimension mismatch".to_string(),
                     ));
                 }
@@ -1316,7 +1316,7 @@ fn eval_scalar_function(name: &str, args: &[Expr], ctx: &mut EvalContext) -> Res
                 let v1 = crate::facet::vector_persistence::parse_vector_literal(&v1_str)?;
                 let v2 = crate::facet::vector_persistence::parse_vector_literal(&v2_str)?;
                 if v1.len() != v2.len() {
-                    return Err(TensorError::SqlExec(
+                    return Err(sql_exec_err(
                         "COSINE_SIMILARITY: dimension mismatch".to_string(),
                     ));
                 }
@@ -1371,7 +1371,7 @@ fn eval_scalar_function(name: &str, args: &[Expr], ctx: &mut EvalContext) -> Res
                 Ok(SqlValue::Null)
             }
         }
-        _ => Err(TensorError::SqlExec(format!("unknown function: {name}"))),
+        _ => Err(sql_exec_err(format!("unknown function: {name}"))),
     }
 }
 
