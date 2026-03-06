@@ -5,7 +5,8 @@ import starlight from '@astrojs/starlight';
 const noSitemap = { name: '@astrojs/sitemap', hooks: {} };
 
 export default defineConfig({
-  site: 'https://tensordb.netlify.app',
+  site: 'https://tensor-db.github.io',
+  base: '/TensorDB',
   integrations: [
     noSitemap,
     starlight({
