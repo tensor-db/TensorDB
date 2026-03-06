@@ -1,6 +1,6 @@
 [package]
 name = "tensordb-server"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "PostgreSQL wire protocol server for TensorDB"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -10,7 +10,7 @@ name = "tensordb-server"
 path = "src/main.rs"
 
 [dependencies]
-tensordb-core = { path = "../tensordb-core" }
+tensordb-core = { path = "../tensordb-core", version = "0.3.0" }
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
 tracing = "0.1"

@@ -1,6 +1,6 @@
 [package]
 name = "tensordb-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Core engine for TensorDB — a bitemporal ledger database with MVCC, full SQL, and LSM storage"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -32,7 +32,7 @@ rust_decimal = { version = "1", features = ["serde-with-str"] }
 half = "2"
 aes-gcm = { version = "0.10", optional = true }
 
-tensordb-native = { path = "../tensordb-native", optional = true }
+tensordb-native = { path = "../tensordb-native", version = "0.3.0", optional = true }
 io-uring = { version = "0.7", optional = true }
 parquet = { version = "54", optional = true, default-features = false, features = ["arrow"] }
 arrow = { version = "54", optional = true, default-features = false, features = ["json"] }

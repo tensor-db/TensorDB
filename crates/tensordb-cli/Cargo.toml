@@ -1,6 +1,6 @@
 [package]
 name = "tensordb-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Interactive CLI shell for TensorDB with TAB completion and output modes"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -15,4 +15,4 @@ llm = ["tensordb-core/llm"]
 clap = { version = "4", features = ["derive"] }
 rustyline = "14"
 serde_json = "1"
-tensordb-core = { path = "../tensordb-core" }
+tensordb-core = { path = "../tensordb-core", version = "0.3.0" }

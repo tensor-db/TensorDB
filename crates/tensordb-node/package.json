@@ -1,7 +1,7 @@
 {
   "name": "tensordb",
-  "version": "0.2.0",
-  "description": "AI-native, bitemporal ledger database with MVCC, SQL, and LSM storage",
+  "version": "0.3.0",
+  "description": "Bitemporal ledger database with MVCC, SQL, and LSM storage",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
@@ -40,6 +40,6 @@
     "@napi-rs/cli": "^2.18.0"
   },
   "optionalDependencies": {
-    "tensordb-linux-x64-gnu": "0.2.0"
+    "tensordb-linux-x64-gnu": "0.3.0"
   }
 }

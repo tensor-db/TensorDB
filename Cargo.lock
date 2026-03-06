@@ -2783,7 +2783,7 @@ dependencies = [
 
 [[package]]
 name = "tensordb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "fastrand",
@@ -2798,7 +2798,7 @@ dependencies = [
 
 [[package]]
 name = "tensordb-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "rustyline",
@@ -2808,7 +2808,7 @@ dependencies = [
 
 [[package]]
 name = "tensordb-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes-gcm",
  "arrow",
@@ -2836,7 +2836,7 @@ dependencies = [
 
 [[package]]
 name = "tensordb-distributed"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "crossbeam-channel",
  "fastrand",
@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "tensordb-native"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cxx",
  "cxx-build",
@@ -2869,7 +2869,7 @@ dependencies = [
 
 [[package]]
 name = "tensordb-python"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "pyo3",
  "serde_json",
@@ -2878,7 +2878,7 @@ dependencies = [
 
 [[package]]
 name = "tensordb-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "http-body-util",
