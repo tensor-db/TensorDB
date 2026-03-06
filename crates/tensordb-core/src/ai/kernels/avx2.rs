@@ -29,7 +29,7 @@ pub unsafe fn q8_0_matvec(
     const BLOCK_BYTES: usize = 34;
     let blocks_per_row = cols / BLOCK_SIZE;
 
-    for r in 0..rows {
+    for (r, output_r) in output.iter_mut().enumerate().take(rows) {
         let mut acc = _mm256_setzero_ps();
         let row_offset = r * blocks_per_row * BLOCK_BYTES;
 
@@ -83,7 +83,7 @@ pub unsafe fn q8_0_matvec(
         let sum64 = _mm_add_ps(sum128, shuf64);
         let shuf32 = _mm_movehl_ps(sum64, sum64);
         let sum32 = _mm_add_ss(sum64, shuf32);
-        output[r] = _mm_cvtss_f32(sum32);
+        *output_r = _mm_cvtss_f32(sum32);
     }
 }
 
@@ -113,7 +113,7 @@ pub unsafe fn q4_0_matvec(
     let lo_mask = _mm256_set1_epi8(0x0F);
     let bias = _mm256_set1_epi16(8);
 
-    for r in 0..rows {
+    for (r, output_r) in output.iter_mut().enumerate().take(rows) {
         let mut acc = _mm256_setzero_ps();
         let row_offset = r * blocks_per_row * BLOCK_BYTES;
 
@@ -198,7 +198,7 @@ pub unsafe fn q4_0_matvec(
         let sum64 = _mm_add_ps(sum128, shuf64);
         let shuf32 = _mm_movehl_ps(sum64, sum64);
         let sum32 = _mm_add_ss(sum64, shuf32);
-        output[r] = _mm_cvtss_f32(sum32);
+        *output_r = _mm_cvtss_f32(sum32);
     }
 }
 
@@ -237,8 +237,8 @@ pub unsafe fn rms_norm(x: &[f32], weight: &[f32], eps: f32, output: &mut [f32]) 
     let mut ss = _mm_cvtss_f32(sum32);
 
     // Handle remainder elements
-    for i in (chunks * 8)..n {
-        ss += x[i] * x[i];
+    for xi in &x[(chunks * 8)..n] {
+        ss += xi * xi;
     }
 
     let inv_rms = 1.0 / (ss / n as f32 + eps).sqrt();

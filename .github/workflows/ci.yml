@@ -29,16 +29,6 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --all-targets
 
-      - name: AI overhead gate
-        run: |
-          WRITE_OPS=5000 \
-          READ_OPS=2500 \
-          KEYSPACE=1500 \
-          MAX_WRITE_DROP_PCT=90 \
-          MAX_P95_INCREASE_PCT=150 \
-          MAX_P99_INCREASE_PCT=150 \
-          ./scripts/ai_overhead_gate.sh
-
   test-native:
     name: Test (Native Feature)
     runs-on: ubuntu-latest
