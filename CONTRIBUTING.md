@@ -34,9 +34,6 @@ cargo test --features parquet
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 
-# AI overhead regression gate
-./scripts/ai_overhead_gate.sh
-
 # Benchmarks
 cargo bench --bench comparative
 cargo bench --bench multi_engine
@@ -46,7 +43,7 @@ cargo bench --bench multi_engine
 
 | Crate | Purpose |
 |-------|---------|
-| `tensordb-core` | Database engine: storage, SQL, AI runtime, facets (~31k lines) |
+| `tensordb-core` | Database engine: storage, SQL, facets (~31k lines) |
 | `tensordb-cli` | Interactive shell with TAB completion and output modes |
 | `tensordb-server` | PostgreSQL wire protocol server (pgwire) |
 | `tensordb-native` | Optional C++ acceleration via cxx (behind `--features native`) |
@@ -80,7 +77,7 @@ Default workspace members: root, core, cli, server. Python and Node crates are e
 - Keep modules focused — one concern per file
 - Prefer `Arc<T>` for shared ownership, `RwLock` for read-heavy shared state
 - Use `crossbeam_channel` for inter-thread communication
-- SQL metadata under `__meta/` prefix, AI data under `__ai/` prefix
+- SQL metadata under `__meta/` prefix
 
 ## Running the Documentation Site
 

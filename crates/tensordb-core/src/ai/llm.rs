@@ -30,9 +30,6 @@ const MODEL_FILENAME: &str = "Qwen3-0.6B-Q8_0.gguf";
 const MODEL_URL: &str =
     "https://github.com/tensor-db/TensorDB/releases/download/v0.2.0-model/Qwen3-0.6B-Q8_0.gguf";
 
-const SYSTEM_PROMPT: &str = "\
-You are a SQL translator. Generate SQL only. /no_think";
-
 struct LoadedModel {
     model: TransformerModel,
     tokenizer: BpeTokenizer,
@@ -269,7 +266,6 @@ impl LlmEngine {
 
     pub fn nl_to_sql(&self, question: &str, schema_context: &str) -> Result<String> {
         // Select only relevant tables to keep prompt short.
-        // The 0.6B model degrades when given too many tables.
         let filtered_schema = filter_schema_for_question(schema_context, question);
 
         let user_content = if filtered_schema.is_empty() {
@@ -277,15 +273,16 @@ impl LlmEngine {
         } else {
             format!("{filtered_schema}\n{question}")
         };
+
+        // Build system prompt dynamically from TensorDB's SQL capabilities.
+        let system_prompt = build_system_prompt();
+
         let prompt = format!(
-            "<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n\
+            "<|im_start|>system\n{system_prompt}<|im_end|>\n\
              <|im_start|>user\n{user_content}<|im_end|>\n\
              <|im_start|>assistant\n"
         );
 
-        // Use generate() which handles grammar constraints via soft penalty.
-        // The active vocab / prefix KV cache optimizations produce identical
-        // logits (verified), but generate() is simpler for now.
         let raw = self.generate(&prompt, self.max_tokens)?;
 
         let sql = clean_sql_output(&raw);
@@ -295,6 +292,100 @@ impl LlmEngine {
         }
 
         Ok(sql)
+    }
+
+    /// Get the configured max tokens for generation.
+    pub fn max_tokens(&self) -> usize {
+        self.max_tokens
+    }
+
+    /// Generate text for tool-calling mode (no grammar constraints).
+    ///
+    /// Unlike `generate()`, this method:
+    /// - **Skips** grammar constraints (model needs JSON freedom for `<tool_call>` output)
+    /// - **Stops** on `</tool_call>` detection in the token stream
+    /// - **Stops** on semicolon+newline only if no `<tool_call>` prefix was emitted
+    /// - Returns raw text including tool call tags
+    pub fn generate_for_tool_calling(&self, prompt: &str, max_tokens: usize) -> Result<String> {
+        self.ensure_loaded()?;
+
+        let mut guard = self.inner.lock();
+        let loaded = guard.as_mut().ok_or(TensorError::LlmNotAvailable)?;
+
+        let tokens = loaded.tokenizer.encode(prompt);
+        if tokens.is_empty() {
+            return Err(TensorError::LlmError(
+                "prompt tokenized to empty sequence".to_string(),
+            ));
+        }
+
+        let ctx_size = self.context_size;
+        let mut kv_cache = KvCache::new(
+            loaded.config.n_layers,
+            loaded.config.n_kv_heads,
+            loaded.config.head_dim,
+            ctx_size,
+        );
+
+        // Prefill: process all prompt tokens
+        loaded
+            .model
+            .forward_batch_into(&tokens, 0, &mut kv_cache, &mut loaded.scratch);
+
+        // Generation loop — no grammar constraints, stops on </tool_call> or EOS
+        let mut sampler = Sampler::new(0.0, 1.0, 1.3, 0);
+        let mut output_tokens: Vec<u32> = Vec::new();
+        let mut pos = tokens.len();
+        let mut has_tool_call_prefix = false;
+
+        for _ in 0..max_tokens {
+            // NO grammar.apply() — model generates freely
+
+            let token = sampler.sample(&mut loaded.scratch.logits, &output_tokens);
+
+            if loaded.tokenizer.is_eos(token) {
+                break;
+            }
+
+            output_tokens.push(token);
+
+            let output_so_far = loaded.tokenizer.decode(&output_tokens);
+
+            // Track whether we've seen a <tool_call> prefix
+            if !has_tool_call_prefix && output_so_far.contains("<tool_call>") {
+                has_tool_call_prefix = true;
+            }
+
+            // Stop on </tool_call> — we have a complete tool call
+            if has_tool_call_prefix && output_so_far.contains("</tool_call>") {
+                break;
+            }
+
+            // Stop on semicolon+newline only if NOT in a tool call
+            if !has_tool_call_prefix {
+                let piece = loaded.tokenizer.decode(&[token]);
+                if piece.contains('\n') && output_so_far.contains(';') {
+                    break;
+                }
+            }
+
+            // Stop on <|im_end|>
+            if output_so_far.contains("<|im_end|>") {
+                break;
+            }
+
+            if pos >= ctx_size - 1 {
+                break;
+            }
+
+            loaded
+                .model
+                .forward_into(token, pos, &mut kv_cache, &mut loaded.scratch);
+            pos += 1;
+        }
+
+        let output = loaded.tokenizer.decode(&output_tokens);
+        Ok(output.trim().to_string())
     }
 
     /// Invalidate the schema cache. Called after DDL statements.
@@ -386,7 +477,207 @@ const SQL_KEYWORDS: &[&str] = &[
     "EXPLAIN", "WITH", "ANALYZE", "COPY",
 ];
 
-fn clean_sql_output(raw: &str) -> String {
+// ---------------------------------------------------------------------------
+// Dynamic system prompt — assembled from TensorDB's structured SQL capabilities.
+//
+// Each array below mirrors the actual implementations in parser.rs and eval.rs.
+// When adding a new SQL function or feature to TensorDB, add it to the relevant
+// array here so the LLM prompt automatically reflects the change.
+// ---------------------------------------------------------------------------
+
+/// TensorDB SQL data types (from `SqlType` enum in parser.rs).
+const SQL_DATA_TYPES: &[&str] = &[
+    "INTEGER",
+    "REAL",
+    "TEXT",
+    "BOOLEAN",
+    "BLOB",
+    "JSON",
+    "DECIMAL(p,s)",
+    "VECTOR(n)",
+];
+
+/// Aggregate functions (from `is_aggregate_function()` in parser.rs).
+const SQL_AGGREGATE_FNS: &[&str] = &[
+    "COUNT",
+    "SUM",
+    "AVG",
+    "MIN",
+    "MAX",
+    "FIRST",
+    "LAST",
+    "STRING_AGG",
+    "GROUP_CONCAT",
+    "STDDEV_POP",
+    "STDDEV_SAMP",
+    "VAR_POP",
+    "VAR_SAMP",
+    "APPROX_COUNT_DISTINCT",
+];
+
+/// Window functions (from `is_window_function()` in parser.rs).
+const SQL_WINDOW_FNS: &[&str] = &["ROW_NUMBER", "RANK", "DENSE_RANK", "LEAD", "LAG"];
+
+/// String functions (from `eval_scalar_function()` in eval.rs).
+const SQL_STRING_FNS: &[&str] = &[
+    "UPPER",
+    "LOWER",
+    "LENGTH",
+    "SUBSTR",
+    "TRIM",
+    "LTRIM",
+    "RTRIM",
+    "CONCAT",
+    "CONCAT_WS",
+    "REPLACE",
+    "REVERSE",
+    "SPLIT_PART",
+    "LEFT",
+    "RIGHT",
+    "LPAD",
+    "RPAD",
+    "REPEAT",
+    "POSITION",
+    "INITCAP",
+];
+
+/// Math functions (from `eval_scalar_function()` in eval.rs).
+const SQL_MATH_FNS: &[&str] = &[
+    "ABS", "ROUND", "CEIL", "FLOOR", "MOD", "POWER", "SQRT", "LOG", "LN", "EXP", "SIGN", "PI",
+    "RANDOM",
+];
+
+/// Date/time functions (from `eval_scalar_function()` in eval.rs).
+const SQL_DATE_FNS: &[&str] = &[
+    "NOW",
+    "CURRENT_TIMESTAMP",
+    "EXTRACT",
+    "DATE_TRUNC",
+    "DATE_PART",
+    "TO_CHAR",
+    "EPOCH",
+];
+
+/// Conditional / control-flow functions (from `eval_scalar_function()` in eval.rs).
+const SQL_CONDITIONAL_FNS: &[&str] = &["COALESCE", "NULLIF", "GREATEST", "LEAST", "IF", "IIF"];
+
+/// Full-text search functions (from FTS facet in eval.rs).
+const SQL_FTS_FNS: &[&str] = &["MATCH", "HIGHLIGHT"];
+
+/// Vector search functions (from vector facet in eval.rs).
+const SQL_VECTOR_FNS: &[&str] = &[
+    "VECTOR_DISTANCE",
+    "COSINE_SIMILARITY",
+    "VECTOR_NORM",
+    "VECTOR_DIMS",
+    "HYBRID_SCORE",
+];
+
+/// Time-series functions (from time-series facet in eval.rs).
+const SQL_TIMESERIES_FNS: &[&str] = &[
+    "TIME_BUCKET",
+    "TIME_BUCKET_GAPFILL",
+    "LOCF",
+    "INTERPOLATE",
+    "DELTA",
+    "RATE",
+];
+
+/// JOIN types (from `JoinType` enum in parser.rs).
+const SQL_JOIN_TYPES: &[&str] = &["INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "CROSS JOIN"];
+
+/// Set operations (from `SetOpType` in parser.rs).
+const SQL_SET_OPS: &[&str] = &["UNION", "UNION ALL", "INTERSECT", "EXCEPT"];
+
+/// Build the system prompt dynamically from TensorDB's structured SQL capabilities.
+///
+/// The prompt is assembled from the capability arrays above, ensuring it always
+/// reflects the actual supported SQL dialect. To extend the prompt when adding
+/// a new feature to TensorDB, add the function/type name to the relevant array.
+fn build_system_prompt() -> String {
+    let mut p = String::with_capacity(2048);
+
+    // Role + output format
+    p.push_str(
+        "You are TensorDB's SQL assistant. \
+         Generate exactly one SQL statement. Output SQL only, no explanation.\n\n",
+    );
+
+    // Critical syntax rules the model must follow
+    p.push_str("Rules:\n");
+    p.push_str("- Use ONLY tables and columns from the provided schema\n");
+    p.push_str("- INSERT requires column names: INSERT INTO t (c1, c2) VALUES (v1, v2)\n");
+    p.push_str("- Use single quotes for string literals\n");
+    p.push_str("- For JOINs, use explicit column references: table.column\n\n");
+
+    // SQL dialect reference
+    p.push_str("TensorDB SQL dialect:\n");
+
+    p.push_str("Types: ");
+    p.push_str(&SQL_DATA_TYPES.join(", "));
+    p.push('\n');
+
+    p.push_str("Joins: ");
+    p.push_str(&SQL_JOIN_TYPES.join(", "));
+    p.push('\n');
+
+    p.push_str("Aggregates: ");
+    p.push_str(&SQL_AGGREGATE_FNS.join(", "));
+    p.push('\n');
+
+    p.push_str("Window: ");
+    p.push_str(&SQL_WINDOW_FNS.join(", "));
+    p.push_str(" OVER (PARTITION BY ... ORDER BY ...)\n");
+
+    p.push_str("String: ");
+    p.push_str(&SQL_STRING_FNS.join(", "));
+    p.push('\n');
+
+    p.push_str("Math: ");
+    p.push_str(&SQL_MATH_FNS.join(", "));
+    p.push('\n');
+
+    p.push_str("Date: ");
+    p.push_str(&SQL_DATE_FNS.join(", "));
+    p.push('\n');
+
+    p.push_str("Cond: ");
+    p.push_str(&SQL_CONDITIONAL_FNS.join(", "));
+    p.push_str(", CASE WHEN..THEN..END, CAST(x AS type)\n");
+
+    p.push_str("Patterns: LIKE, ILIKE, IN(..), BETWEEN x AND y, IS NULL, IS NOT NULL\n");
+
+    p.push_str("Sets: ");
+    p.push_str(&SQL_SET_OPS.join(", "));
+    p.push('\n');
+
+    p.push_str("CTEs: WITH name AS (SELECT ..) SELECT ..\n");
+
+    p.push_str("Temporal: SELECT .. AS OF <epoch>, VALID AT <ts>\n");
+    p.push_str("SQL:2011: FOR SYSTEM_TIME AS OF|FROM..TO|BETWEEN..AND|ALL\n");
+
+    p.push_str("FTS: ");
+    p.push_str(&SQL_FTS_FNS.join(", "));
+    p.push_str("(column, 'query')\n");
+
+    p.push_str("Vector: ");
+    p.push_str(&SQL_VECTOR_FNS.join(", "));
+    p.push_str(", <-> distance operator\n");
+
+    p.push_str("TimeSeries: ");
+    p.push_str(&SQL_TIMESERIES_FNS.join(", "));
+    p.push('\n');
+
+    p.push_str("Utility: SHOW TABLES, DESCRIBE t, EXPLAIN, EXPLAIN ANALYZE\n");
+    p.push_str("Import: COPY t TO/FROM 'path' FORMAT CSV|JSON|PARQUET\n");
+
+    // No-think directive for Qwen3 models (suppresses thinking blocks)
+    p.push_str("/no_think");
+
+    p
+}
+
+pub(crate) fn clean_sql_output(raw: &str) -> String {
     let mut s = raw.trim().to_string();
 
     // Strip ChatML end-of-turn token if present
@@ -544,5 +835,96 @@ mod tests {
             clean_sql_output("SELECT * FROM users; -- this lists all users"),
             "SELECT * FROM users"
         );
+    }
+
+    #[test]
+    fn system_prompt_includes_all_capability_sections() {
+        let prompt = build_system_prompt();
+
+        // Role definition
+        assert!(prompt.contains("TensorDB"));
+        assert!(prompt.contains("SQL"));
+
+        // Critical rules
+        assert!(prompt.contains("INSERT requires column names"));
+        assert!(prompt.contains("ONLY tables and columns"));
+
+        // Data types
+        assert!(prompt.contains("INTEGER"));
+        assert!(prompt.contains("VECTOR(n)"));
+
+        // Aggregates
+        assert!(prompt.contains("COUNT"));
+        assert!(prompt.contains("AVG"));
+        assert!(prompt.contains("APPROX_COUNT_DISTINCT"));
+
+        // Window functions
+        assert!(prompt.contains("ROW_NUMBER"));
+        assert!(prompt.contains("OVER"));
+
+        // String functions
+        assert!(prompt.contains("UPPER"));
+        assert!(prompt.contains("SUBSTR"));
+
+        // Math functions
+        assert!(prompt.contains("ABS"));
+        assert!(prompt.contains("ROUND"));
+
+        // Date functions
+        assert!(prompt.contains("NOW"));
+        assert!(prompt.contains("EXTRACT"));
+
+        // Joins
+        assert!(prompt.contains("LEFT JOIN"));
+
+        // Temporal
+        assert!(prompt.contains("AS OF"));
+        assert!(prompt.contains("SYSTEM_TIME"));
+
+        // FTS
+        assert!(prompt.contains("MATCH"));
+        assert!(prompt.contains("HIGHLIGHT"));
+
+        // Vector
+        assert!(prompt.contains("COSINE_SIMILARITY"));
+        assert!(prompt.contains("<-> distance"));
+
+        // Time-series
+        assert!(prompt.contains("TIME_BUCKET"));
+        assert!(prompt.contains("INTERPOLATE"));
+
+        // Set operations
+        assert!(prompt.contains("UNION"));
+        assert!(prompt.contains("INTERSECT"));
+
+        // CTEs
+        assert!(prompt.contains("WITH name AS"));
+
+        // Utility
+        assert!(prompt.contains("SHOW TABLES"));
+        assert!(prompt.contains("DESCRIBE"));
+
+        // Import/export
+        assert!(prompt.contains("COPY"));
+        assert!(prompt.contains("PARQUET"));
+
+        // No-think directive
+        assert!(prompt.contains("/no_think"));
+    }
+
+    #[test]
+    fn system_prompt_is_not_hardcoded_string() {
+        // The prompt must be dynamically built from capability arrays.
+        // Verify it includes items from each array by checking array contents appear.
+        let prompt = build_system_prompt();
+        for dt in super::SQL_DATA_TYPES {
+            assert!(prompt.contains(dt), "missing data type: {dt}");
+        }
+        for f in super::SQL_AGGREGATE_FNS {
+            assert!(prompt.contains(f), "missing aggregate: {f}");
+        }
+        for f in super::SQL_WINDOW_FNS {
+            assert!(prompt.contains(f), "missing window fn: {f}");
+        }
     }
 }

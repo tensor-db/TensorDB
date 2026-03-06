@@ -53,6 +53,19 @@ pub enum Expr {
         expr: Box<Expr>,
         target_type: String,
     },
+    /// `expr IN (SELECT ...)`
+    InSubquery {
+        expr: Box<Expr>,
+        query: Box<Statement>,
+        negated: bool,
+    },
+    /// `EXISTS (SELECT ...)`
+    Exists {
+        query: Box<Statement>,
+        negated: bool,
+    },
+    /// `(SELECT ...)` as scalar value
+    ScalarSubquery(Box<Statement>),
 }
 
 pub fn is_window_function(name: &str) -> bool {
@@ -81,6 +94,12 @@ pub enum BinOperator {
     Mod,
     /// `<->` vector distance operator
     VectorDistance,
+    /// `->` JSON field access (returns JSON value)
+    JsonArrow,
+    /// `->>` JSON field access (returns text)
+    JsonArrowText,
+    /// `@>` JSON containment
+    JsonContains,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +114,7 @@ pub enum JoinType {
     Left,
     Right,
     Cross,
+    FullOuter,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +129,14 @@ pub struct JoinSpec {
 pub struct CteClause {
     pub name: String,
     pub query: Box<Statement>,
+    pub recursive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OnConflictClause {
+    pub conflict_columns: Vec<String>,
+    pub do_nothing: bool,
+    pub update_assignments: Vec<(String, Expr)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,6 +194,7 @@ pub enum Statement {
     CreateTable {
         table: String,
         columns: Vec<ColumnDef>,
+        if_not_exists: bool,
     },
     CreateView {
         view: String,
@@ -179,6 +208,7 @@ pub enum Statement {
         table: String,
         columns: Vec<String>,
         unique: bool,
+        if_not_exists: bool,
     },
     /// `CREATE FULLTEXT INDEX <name> ON <table> (<columns>)`
     CreateFulltextIndex {
@@ -224,7 +254,7 @@ pub enum Statement {
     InsertTyped {
         table: String,
         columns: Vec<String>,
-        values: Vec<Expr>,
+        rows: Vec<Vec<Expr>>,
     },
     Update {
         table: String,
@@ -242,7 +272,7 @@ pub enum Statement {
     },
     Select {
         ctes: Vec<CteClause>,
-        from: TableRef,
+        from: Option<TableRef>,
         items: Vec<SelectItem>,
         joins: Vec<JoinSpec>,
         filter: Option<Expr>,
@@ -256,6 +286,7 @@ pub enum Statement {
         having: Option<Expr>,
         order_by: Option<Vec<(Expr, OrderDirection)>>,
         limit: Option<u64>,
+        offset: Option<u64>,
     },
     CopyTo {
         table: String,
@@ -278,6 +309,7 @@ pub enum Statement {
     },
     DropTable {
         table: String,
+        if_exists: bool,
     },
     DropView {
         view: String,
@@ -285,6 +317,7 @@ pub enum Statement {
     DropIndex {
         index: String,
         table: String,
+        if_exists: bool,
     },
     /// Set operations: UNION, UNION ALL, INTERSECT, EXCEPT
     SetOp {
@@ -296,8 +329,33 @@ pub enum Statement {
     InsertReturning {
         table: String,
         columns: Vec<String>,
-        values: Vec<Expr>,
+        rows: Vec<Vec<Expr>>,
         returning: Vec<SelectItem>,
+    },
+    /// UPDATE ... RETURNING
+    UpdateReturning {
+        table: String,
+        set_doc: Expr,
+        set_assignments: Vec<(String, Expr)>,
+        filter: Option<Expr>,
+        as_of: Option<u64>,
+        valid_at: Option<u64>,
+        returning: Vec<SelectItem>,
+    },
+    /// DELETE ... RETURNING
+    DeleteReturning {
+        table: String,
+        filter: Option<Expr>,
+        as_of: Option<u64>,
+        valid_at: Option<u64>,
+        returning: Vec<SelectItem>,
+    },
+    /// INSERT ... ON CONFLICT
+    Upsert {
+        table: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<Expr>>,
+        on_conflict: OnConflictClause,
     },
     /// CREATE TABLE AS SELECT
     CreateTableAs {
@@ -340,6 +398,12 @@ pub enum Statement {
     /// `VERIFY BACKUP '<path>'`
     VerifyBackup {
         path: String,
+    },
+    /// `VERIFY AUDIT LOG`
+    VerifyAuditLog,
+    /// `ROTATE ENCRYPTION KEY '<passphrase>'`
+    RotateEncryptionKey {
+        passphrase: String,
     },
     /// `VACUUM` or `VACUUM <table>`
     Vacuum {
@@ -394,12 +458,14 @@ pub enum Statement {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColumnDef {
     pub name: String,
     pub type_name: SqlType,
     pub primary_key: bool,
     pub not_null: bool,
+    /// Generated column expression: `GENERATED ALWAYS AS (expr)`.
+    pub generated: Option<Expr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -418,6 +484,12 @@ pub enum SqlType {
     Vector {
         dims: u16,
     },
+    /// Timestamp (stored as unix seconds).
+    Timestamp,
+    /// Date (stored as days since epoch).
+    Date,
+    /// Interval (stored as seconds).
+    Interval,
 }
 
 impl SqlType {
@@ -436,6 +508,9 @@ impl SqlType {
             // VECTOR requires parenthesized dimensions, handled by the parser;
             // bare "VECTOR" defaults to dims=0 as a sentinel (parser fills it in).
             "VECTOR" => Some(SqlType::Vector { dims: 0 }),
+            "TIMESTAMP" | "DATETIME" => Some(SqlType::Timestamp),
+            "DATE" => Some(SqlType::Date),
+            "INTERVAL" => Some(SqlType::Interval),
             _ => None,
         }
     }
@@ -450,6 +525,9 @@ impl SqlType {
             SqlType::Json => "JSON",
             SqlType::Decimal { .. } => "DECIMAL",
             SqlType::Vector { .. } => "VECTOR",
+            SqlType::Timestamp => "TIMESTAMP",
+            SqlType::Date => "DATE",
+            SqlType::Interval => "INTERVAL",
         }
     }
 }
@@ -502,6 +580,9 @@ enum Token {
     LtEq,           // <=
     GtEq,           // >=
     VectorDistance, // <->
+    JsonArrow,      // ->
+    JsonArrowText,  // ->>
+    JsonContains,   // @>
 }
 
 pub fn parse_sql(input: &str) -> Result<Statement> {
@@ -715,9 +796,21 @@ impl Parser {
         }
         if self.peek_kw("VERIFY") {
             self.expect_kw("VERIFY")?;
+            if self.peek_kw("AUDIT") {
+                self.expect_kw("AUDIT")?;
+                self.expect_kw("LOG")?;
+                return Ok(Statement::VerifyAuditLog);
+            }
             self.expect_kw("BACKUP")?;
             let path = self.expect_string()?;
             return Ok(Statement::VerifyBackup { path });
+        }
+        if self.peek_kw("ROTATE") {
+            self.expect_kw("ROTATE")?;
+            self.expect_kw("ENCRYPTION")?;
+            self.expect_kw("KEY")?;
+            let passphrase = self.expect_string()?;
+            return Ok(Statement::RotateEncryptionKey { passphrase });
         }
         if self.peek_kw("VACUUM") {
             self.expect_kw("VACUUM")?;
@@ -776,6 +869,14 @@ impl Parser {
 
     fn parse_create_table_after_create(&mut self) -> Result<Statement> {
         self.expect_kw("TABLE")?;
+        let if_not_exists = if self.peek_kw("IF") {
+            self.expect_kw("IF")?;
+            self.expect_kw("NOT")?;
+            self.expect_kw("EXISTS")?;
+            true
+        } else {
+            false
+        };
         let table = self.expect_ident()?;
 
         // CREATE TABLE ... AS SELECT ...
@@ -828,6 +929,7 @@ impl Parser {
 
             let mut primary_key = false;
             let mut not_null = false;
+            let mut generated = None;
 
             // Parse column constraints
             loop {
@@ -839,6 +941,20 @@ impl Parser {
                     self.expect_kw("NOT")?;
                     self.expect_kw("NULL")?;
                     not_null = true;
+                } else if self.peek_kw("GENERATED") {
+                    self.expect_kw("GENERATED")?;
+                    self.expect_kw("ALWAYS")?;
+                    self.expect_kw("AS")?;
+                    self.expect_symbol('(')?;
+                    let expr = self.parse_expr()?;
+                    self.expect_symbol(')')?;
+                    // Optional STORED/VIRTUAL keyword
+                    if self.peek_kw("STORED") {
+                        self.expect_kw("STORED")?;
+                    } else if self.peek_kw("VIRTUAL") {
+                        self.expect_kw("VIRTUAL")?;
+                    }
+                    generated = Some(expr);
                 } else {
                     break;
                 }
@@ -849,6 +965,7 @@ impl Parser {
                 type_name,
                 primary_key,
                 not_null,
+                generated,
             });
 
             if self.peek_symbol(',') {
@@ -859,7 +976,11 @@ impl Parser {
         }
         self.expect_symbol(')')?;
 
-        Ok(Statement::CreateTable { table, columns })
+        Ok(Statement::CreateTable {
+            table,
+            columns,
+            if_not_exists,
+        })
     }
 
     fn parse_create_view_after_create(&mut self) -> Result<Statement> {
@@ -887,7 +1008,7 @@ impl Parser {
         };
 
         let table = match &from {
-            TableRef::Named { name: t, .. } => t.clone(),
+            Some(TableRef::Named { name: t, .. }) => t.clone(),
             _ => {
                 return Err(sql_parse_err(
                     "CREATE VIEW requires simple table reference".to_string(),
@@ -1052,6 +1173,7 @@ impl Parser {
                 type_name,
                 primary_key,
                 not_null,
+                generated: None,
             });
 
             if self.peek_symbol(',') {
@@ -1091,6 +1213,14 @@ impl Parser {
 
     fn parse_create_index_after_create(&mut self, unique: bool) -> Result<Statement> {
         self.expect_kw("INDEX")?;
+        let if_not_exists = if self.peek_kw("IF") {
+            self.expect_kw("IF")?;
+            self.expect_kw("NOT")?;
+            self.expect_kw("EXISTS")?;
+            true
+        } else {
+            false
+        };
         let index = self.expect_ident()?;
         self.expect_kw("ON")?;
         let table = self.expect_ident()?;
@@ -1106,6 +1236,7 @@ impl Parser {
             table,
             columns,
             unique,
+            if_not_exists,
         })
     }
 
@@ -1177,19 +1308,90 @@ impl Parser {
             return Ok(Statement::Insert { table, pk, doc });
         }
 
-        // Typed insert: collect value expressions
-        let mut values = Vec::new();
-        values.push(self.parse_expr()?);
+        // Typed insert: collect value expressions (first row)
+        let mut first_row = Vec::new();
+        first_row.push(self.parse_expr()?);
         while self.peek_symbol(',') {
             self.expect_symbol(',')?;
-            values.push(self.parse_expr()?);
+            first_row.push(self.parse_expr()?);
         }
         self.expect_symbol(')')?;
 
-        if col_names.len() != values.len() {
+        if col_names.len() != first_row.len() {
             return Err(sql_parse_err(
                 "column count does not match value count".to_string(),
             ));
+        }
+
+        let mut rows = vec![first_row];
+
+        // Multi-value INSERT: parse additional value tuples
+        while self.peek_symbol(',') {
+            self.expect_symbol(',')?;
+            self.expect_symbol('(')?;
+            let mut row = Vec::new();
+            row.push(self.parse_expr()?);
+            while self.peek_symbol(',') {
+                self.expect_symbol(',')?;
+                row.push(self.parse_expr()?);
+            }
+            self.expect_symbol(')')?;
+            if col_names.len() != row.len() {
+                return Err(sql_parse_err(
+                    "column count does not match value count".to_string(),
+                ));
+            }
+            rows.push(row);
+        }
+
+        // Check for ON CONFLICT clause (upsert)
+        if self.peek_kw("ON") {
+            self.expect_kw("ON")?;
+            self.expect_kw("CONFLICT")?;
+            self.expect_symbol('(')?;
+            let mut conflict_columns = vec![self.expect_ident()?];
+            while self.peek_symbol(',') {
+                self.expect_symbol(',')?;
+                conflict_columns.push(self.expect_ident()?);
+            }
+            self.expect_symbol(')')?;
+            self.expect_kw("DO")?;
+            if self.peek_kw("NOTHING") {
+                self.expect_kw("NOTHING")?;
+                return Ok(Statement::Upsert {
+                    table,
+                    columns: col_names,
+                    rows,
+                    on_conflict: OnConflictClause {
+                        conflict_columns,
+                        do_nothing: true,
+                        update_assignments: Vec::new(),
+                    },
+                });
+            }
+            self.expect_kw("UPDATE")?;
+            self.expect_kw("SET")?;
+            let mut assignments = Vec::new();
+            loop {
+                let col = self.expect_ident()?;
+                self.expect_symbol('=')?;
+                let val = self.parse_expr()?;
+                assignments.push((col, val));
+                if !self.peek_symbol(',') {
+                    break;
+                }
+                self.expect_symbol(',')?;
+            }
+            return Ok(Statement::Upsert {
+                table,
+                columns: col_names,
+                rows,
+                on_conflict: OnConflictClause {
+                    conflict_columns,
+                    do_nothing: false,
+                    update_assignments: assignments,
+                },
+            });
         }
 
         // Check for RETURNING clause
@@ -1204,7 +1406,7 @@ impl Parser {
             return Ok(Statement::InsertReturning {
                 table,
                 columns: col_names,
-                values,
+                rows,
                 returning,
             });
         }
@@ -1212,7 +1414,7 @@ impl Parser {
         Ok(Statement::InsertTyped {
             table,
             columns: col_names,
-            values,
+            rows,
         })
     }
 
@@ -1254,6 +1456,26 @@ impl Parser {
         let mut valid_at = None;
         self.parse_temporal_clauses(&mut as_of, &mut valid_at)?;
 
+        // Check for RETURNING clause
+        if self.peek_kw("RETURNING") {
+            self.expect_kw("RETURNING")?;
+            let mut returning = Vec::new();
+            returning.push(self.parse_select_item()?);
+            while self.peek_symbol(',') {
+                self.expect_symbol(',')?;
+                returning.push(self.parse_select_item()?);
+            }
+            return Ok(Statement::UpdateReturning {
+                table,
+                set_doc: set_doc.unwrap_or(Expr::Null),
+                set_assignments,
+                filter,
+                as_of,
+                valid_at,
+                returning,
+            });
+        }
+
         Ok(Statement::Update {
             table,
             set_doc: set_doc.unwrap_or(Expr::Null),
@@ -1280,6 +1502,24 @@ impl Parser {
         let mut valid_at = None;
         self.parse_temporal_clauses(&mut as_of, &mut valid_at)?;
 
+        // Check for RETURNING clause
+        if self.peek_kw("RETURNING") {
+            self.expect_kw("RETURNING")?;
+            let mut returning = Vec::new();
+            returning.push(self.parse_select_item()?);
+            while self.peek_symbol(',') {
+                self.expect_symbol(',')?;
+                returning.push(self.parse_select_item()?);
+            }
+            return Ok(Statement::DeleteReturning {
+                table,
+                filter,
+                as_of,
+                valid_at,
+                returning,
+            });
+        }
+
         Ok(Statement::Delete {
             table,
             filter,
@@ -1292,15 +1532,24 @@ impl Parser {
         let mut ctes = Vec::new();
         if self.peek_kw("WITH") {
             self.expect_kw("WITH")?;
+            let is_recursive = if self.peek_kw("RECURSIVE") {
+                self.expect_kw("RECURSIVE")?;
+                true
+            } else {
+                false
+            };
             loop {
                 let name = self.expect_ident()?;
                 self.expect_kw("AS")?;
                 self.expect_symbol('(')?;
                 let query = self.parse_select_or_cte()?;
+                // Handle UNION ALL / INTERSECT / EXCEPT within CTE body
+                let query = self.try_parse_set_op(query)?;
                 self.expect_symbol(')')?;
                 ctes.push(CteClause {
                     name,
                     query: Box::new(query),
+                    recursive: is_recursive,
                 });
                 if self.peek_symbol(',') {
                     self.expect_symbol(',')?;
@@ -1323,13 +1572,20 @@ impl Parser {
             items.push(self.parse_select_item()?);
         }
 
-        self.expect_kw("FROM")?;
-        let from = self.parse_table_ref()?;
+        // FROM is optional (e.g. SELECT 1+1, SELECT NOW())
+        let from = if self.peek_kw("FROM") {
+            self.expect_kw("FROM")?;
+            Some(self.parse_table_ref()?)
+        } else {
+            None
+        };
 
         // Parse JOINs (supports N-way: FROM a JOIN b ON ... JOIN c ON ...)
         let mut joins = Vec::new();
-        while let Some(j) = self.try_parse_join(&from)? {
-            joins.push(j);
+        if let Some(ref f) = from {
+            while let Some(j) = self.try_parse_join(f)? {
+                joins.push(j);
+            }
         }
 
         // Parse WHERE
@@ -1348,6 +1604,7 @@ impl Parser {
         let mut having = None;
         let mut order_by = None;
         let mut limit = None;
+        let mut offset = None;
 
         loop {
             if self.peek_kw("AS") && self.peek_kw_at(1, "OF") {
@@ -1461,6 +1718,15 @@ impl Parser {
                 continue;
             }
 
+            if self.peek_kw("OFFSET") {
+                if offset.is_some() {
+                    return Err(sql_parse_err("OFFSET specified more than once".to_string()));
+                }
+                self.expect_kw("OFFSET")?;
+                offset = Some(self.expect_number_u64()?);
+                continue;
+            }
+
             break;
         }
 
@@ -1478,6 +1744,7 @@ impl Parser {
             having,
             order_by,
             limit,
+            offset,
         })
     }
 
@@ -1551,6 +1818,7 @@ impl Parser {
                     && !self.peek_kw("LEFT")
                     && !self.peek_kw("RIGHT")
                     && !self.peek_kw("CROSS")
+                    && !self.peek_kw("FULL")
                     && !self.peek_kw("UNION")
                     && !self.peek_kw("INTERSECT")
                     && !self.peek_kw("EXCEPT")
@@ -1577,6 +1845,7 @@ impl Parser {
                     && !self.peek_kw("LEFT")
                     && !self.peek_kw("RIGHT")
                     && !self.peek_kw("CROSS")
+                    && !self.peek_kw("FULL")
                     && !self.peek_kw("UNION")
                     && !self.peek_kw("INTERSECT")
                     && !self.peek_kw("EXCEPT")
@@ -1617,6 +1886,13 @@ impl Parser {
             }
             self.expect_kw("JOIN")?;
             JoinType::Right
+        } else if self.peek_kw("FULL") {
+            self.expect_kw("FULL")?;
+            if self.peek_kw("OUTER") {
+                self.expect_kw("OUTER")?;
+            }
+            self.expect_kw("JOIN")?;
+            JoinType::FullOuter
         } else if self.peek_kw("CROSS") {
             self.expect_kw("CROSS")?;
             self.expect_kw("JOIN")?;
@@ -1868,6 +2144,16 @@ impl Parser {
             if self.peek_kw("IN") {
                 self.expect_kw("IN")?;
                 self.expect_symbol('(')?;
+                // Check for subquery: NOT IN (SELECT ...)
+                if self.peek_kw("SELECT") || self.peek_kw("WITH") {
+                    let query = self.parse_select_or_cte()?;
+                    self.expect_symbol(')')?;
+                    return Ok(Expr::InSubquery {
+                        expr: Box::new(left),
+                        query: Box::new(query),
+                        negated: true,
+                    });
+                }
                 let mut list = Vec::new();
                 list.push(self.parse_expr()?);
                 while self.peek_symbol(',') {
@@ -1920,6 +2206,16 @@ impl Parser {
         if self.peek_kw("IN") {
             self.expect_kw("IN")?;
             self.expect_symbol('(')?;
+            // Check for subquery: IN (SELECT ...)
+            if self.peek_kw("SELECT") || self.peek_kw("WITH") {
+                let query = self.parse_select_or_cte()?;
+                self.expect_symbol(')')?;
+                return Ok(Expr::InSubquery {
+                    expr: Box::new(left),
+                    query: Box::new(query),
+                    negated: false,
+                });
+            }
             let mut list = Vec::new();
             list.push(self.parse_expr()?);
             while self.peek_symbol(',') {
@@ -1963,6 +2259,35 @@ impl Parser {
             return Ok(Expr::BinOp {
                 left: Box::new(left),
                 op: BinOperator::VectorDistance,
+                right: Box::new(right),
+            });
+        }
+
+        // JSON operators: ->, ->>, @>
+        if matches!(self.toks.get(self.i), Some(Token::JsonArrow)) {
+            self.i += 1;
+            let right = self.parse_addition()?;
+            return Ok(Expr::BinOp {
+                left: Box::new(left),
+                op: BinOperator::JsonArrow,
+                right: Box::new(right),
+            });
+        }
+        if matches!(self.toks.get(self.i), Some(Token::JsonArrowText)) {
+            self.i += 1;
+            let right = self.parse_addition()?;
+            return Ok(Expr::BinOp {
+                left: Box::new(left),
+                op: BinOperator::JsonArrowText,
+                right: Box::new(right),
+            });
+        }
+        if matches!(self.toks.get(self.i), Some(Token::JsonContains)) {
+            self.i += 1;
+            let right = self.parse_addition()?;
+            return Ok(Expr::BinOp {
+                left: Box::new(left),
+                op: BinOperator::JsonContains,
                 right: Box::new(right),
             });
         }
@@ -2063,8 +2388,42 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Result<Expr> {
-        // Parenthesized expression
+        // EXISTS (SELECT ...)
+        if self.peek_kw("EXISTS") {
+            self.expect_kw("EXISTS")?;
+            self.expect_symbol('(')?;
+            let query = self.parse_select_or_cte()?;
+            self.expect_symbol(')')?;
+            return Ok(Expr::Exists {
+                query: Box::new(query),
+                negated: false,
+            });
+        }
+
+        // NOT EXISTS (SELECT ...)
+        if self.peek_kw("NOT") && self.peek_kw_at(1, "EXISTS") {
+            self.expect_kw("NOT")?;
+            self.expect_kw("EXISTS")?;
+            self.expect_symbol('(')?;
+            let query = self.parse_select_or_cte()?;
+            self.expect_symbol(')')?;
+            return Ok(Expr::Exists {
+                query: Box::new(query),
+                negated: true,
+            });
+        }
+
+        // Parenthesized expression or scalar subquery
         if self.peek_symbol('(') {
+            let saved = self.i;
+            self.expect_symbol('(')?;
+            // Check if it's a scalar subquery: (SELECT ...)
+            if self.peek_kw("SELECT") || self.peek_kw("WITH") {
+                let query = self.parse_select_or_cte()?;
+                self.expect_symbol(')')?;
+                return Ok(Expr::ScalarSubquery(Box::new(query)));
+            }
+            self.i = saved;
             self.expect_symbol('(')?;
             let expr = self.parse_expr()?;
             self.expect_symbol(')')?;
@@ -2375,8 +2734,15 @@ impl Parser {
         self.expect_kw("DROP")?;
         if self.peek_kw("TABLE") {
             self.expect_kw("TABLE")?;
+            let if_exists = if self.peek_kw("IF") {
+                self.expect_kw("IF")?;
+                self.expect_kw("EXISTS")?;
+                true
+            } else {
+                false
+            };
             let table = self.expect_ident()?;
-            return Ok(Statement::DropTable { table });
+            return Ok(Statement::DropTable { table, if_exists });
         }
         if self.peek_kw("VIEW") {
             self.expect_kw("VIEW")?;
@@ -2401,10 +2767,21 @@ impl Parser {
         }
         if self.peek_kw("INDEX") {
             self.expect_kw("INDEX")?;
+            let if_exists = if self.peek_kw("IF") {
+                self.expect_kw("IF")?;
+                self.expect_kw("EXISTS")?;
+                true
+            } else {
+                false
+            };
             let index = self.expect_ident()?;
             self.expect_kw("ON")?;
             let table = self.expect_ident()?;
-            return Ok(Statement::DropIndex { index, table });
+            return Ok(Statement::DropIndex {
+                index,
+                table,
+                if_exists,
+            });
         }
         if self.peek_kw("POLICY") {
             self.expect_kw("POLICY")?;
@@ -2742,6 +3119,9 @@ fn tokens_to_string(toks: &[Token]) -> String {
             Token::LtEq => parts.push("<=".to_string()),
             Token::GtEq => parts.push(">=".to_string()),
             Token::VectorDistance => parts.push("<->".to_string()),
+            Token::JsonArrow => parts.push("->".to_string()),
+            Token::JsonArrowText => parts.push("->>".to_string()),
+            Token::JsonContains => parts.push("@>".to_string()),
         }
     }
     parts.join(" ")
@@ -2920,6 +3300,24 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
             i += 2;
             continue;
         }
+        // ->> JSON text extraction (must check before ->)
+        if c == '-' && i + 2 < chars.len() && chars[i + 1] == '>' && chars[i + 2] == '>' {
+            out.push(Token::JsonArrowText);
+            i += 3;
+            continue;
+        }
+        // -> JSON field access (must check before symbol '-')
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '>' {
+            out.push(Token::JsonArrow);
+            i += 2;
+            continue;
+        }
+        // @> JSON containment
+        if c == '@' && i + 1 < chars.len() && chars[i + 1] == '>' {
+            out.push(Token::JsonContains);
+            i += 2;
+            continue;
+        }
 
         if "(),;=*.<>+-/%".contains(c) {
             out.push(Token::Symbol(c));
@@ -3010,7 +3408,7 @@ mod tests {
     fn parses_create_table_legacy() {
         let stmt = parse_sql("CREATE TABLE users (pk TEXT PRIMARY KEY);").unwrap();
         assert!(
-            matches!(stmt, Statement::CreateTable { table, columns } if table == "users" && columns.len() == 1)
+            matches!(stmt, Statement::CreateTable { table, columns, .. } if table == "users" && columns.len() == 1)
         );
     }
 
@@ -3020,7 +3418,7 @@ mod tests {
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, balance REAL);",
         )
         .unwrap();
-        if let Statement::CreateTable { table, columns } = stmt {
+        if let Statement::CreateTable { table, columns, .. } = stmt {
             assert_eq!(table, "users");
             assert_eq!(columns.len(), 3);
             assert_eq!(columns[0].name, "id");
@@ -3065,6 +3463,7 @@ mod tests {
                 table: "orders".to_string(),
                 columns: vec!["pk".to_string()],
                 unique: false,
+                if_not_exists: false,
             }
         );
     }
@@ -3079,6 +3478,7 @@ mod tests {
                 table: "users".to_string(),
                 columns: vec!["email".to_string()],
                 unique: true,
+                if_not_exists: false,
             }
         );
     }
@@ -3093,6 +3493,7 @@ mod tests {
                 table: "addresses".to_string(),
                 columns: vec!["city".to_string(), "state".to_string()],
                 unique: false,
+                if_not_exists: false,
             }
         );
     }
@@ -3231,6 +3632,7 @@ mod tests {
             parse_sql("DROP TABLE users;").unwrap(),
             Statement::DropTable {
                 table: "users".to_string(),
+                if_exists: false,
             }
         );
         assert_eq!(
@@ -3244,6 +3646,7 @@ mod tests {
             Statement::DropIndex {
                 index: "idx_users".to_string(),
                 table: "users".to_string(),
+                if_exists: false,
             }
         );
     }
@@ -3251,7 +3654,7 @@ mod tests {
     #[test]
     fn keeps_create_table_syntax_working() {
         let stmt = parse_sql("CREATE TABLE users (pk TEXT PRIMARY KEY);").unwrap();
-        if let Statement::CreateTable { table, columns } = stmt {
+        if let Statement::CreateTable { table, columns, .. } = stmt {
             assert_eq!(table, "users");
             assert_eq!(columns.len(), 1);
             assert_eq!(columns[0].name, "pk");
@@ -3384,7 +3787,7 @@ mod tests {
     fn parses_subquery_in_from() {
         let stmt = parse_sql("SELECT doc FROM (SELECT doc FROM t) sub;").unwrap();
         if let Statement::Select {
-            from: TableRef::Subquery { alias, .. },
+            from: Some(TableRef::Subquery { alias, .. }),
             ..
         } = stmt
         {

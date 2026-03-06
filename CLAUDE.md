@@ -5,14 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test Commands
 
 ```bash
-# Build (pure Rust, default features include llm)
+# Build (pure Rust)
 cargo build
 
 # Run all tests (~800 tests across 51 suites)
 cargo test --workspace --all-targets
 
 # Run a single test suite
-cargo test --test ai_core
+cargo test --test sql_correctness
 cargo test --test sql_correctness
 
 # Run a single test by name
@@ -32,9 +32,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo bench --bench comparative     # TensorDB vs SQLite
 cargo bench --bench multi_engine    # 4-way comparison
 cargo bench --bench basic           # Microbenchmarks
-
-# AI overhead regression gate (CI runs this)
-./scripts/ai_overhead_gate.sh
 
 # Run CLI
 cargo run -p tensordb-cli -- --path ./mydb
@@ -59,7 +56,7 @@ cd docs && npm install && npm run dev   # http://localhost:4321
 | Crate | Purpose |
 |-------|---------|
 | `tensordb` (root) | Re-exports `tensordb-core` |
-| `tensordb-core` | Database engine: storage, SQL, AI runtime, facets (~31k LoC) |
+| `tensordb-core` | Database engine: storage, SQL, facets (~31k LoC) |
 | `tensordb-cli` | Interactive shell (rustyline, clap) |
 | `tensordb-server` | PostgreSQL wire protocol server (tokio, pgwire v3) |
 | `tensordb-native` | Optional C++ acceleration via cxx (behind `--features native`) |
@@ -87,7 +84,7 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 
 - **EOAC Transactions** — `global_epoch: Arc<AtomicU64>` incremented per commit. Incomplete transactions (missing TXN_COMMIT marker) are rolled back on recovery.
 - **MVCC** — Reads filter by `commit_ts` for snapshot isolation. Temporal queries: `AS OF` (system time), `VALID AT` (business time).
-- **AI Runtime** (`crates/tensordb-core/src/ai/`) — Separate thread receiving `ChangeEvent`s, batching (20ms window, max 16 events), synthesizing insights stored under `__ai/` prefix. Includes embedded LLM (Qwen3 0.6B via pure-Rust native inference engine: GGUF loader, BPE tokenizer, transformer runtime, SQL grammar decoder, schema cache, table-filtered context, rayon-parallelized matvec; feature-gated behind `llm`).
+- **Anomaly Detection** (`crates/tensordb-core/src/ai/`) — Write rate anomaly detection, learned cost model.
 - **Observability** — `MetricsRegistry` (counters, gauges, histograms, slow query log) wired into `Database::sql()`. 8 SQL diagnostic commands: `SHOW STATS`, `SHOW SLOW QUERIES`, `SHOW ACTIVE QUERIES`, `SHOW STORAGE`, `SHOW COMPACTION STATUS`, `SHOW WAL STATUS`, `SHOW AUDIT LOG`, `SHOW PLAN GUIDES`. Block cache hit/miss tracking. Health HTTP endpoint on pgwire port+1.
 - **Structured Errors** — `ErrorCode` enum (T1xxx syntax, T2xxx schema, T3xxx constraint, T4xxx execution, T6xxx auth) with `SqlError` struct carrying code, message, suggestion, position. Levenshtein fuzzy matching for "Did you mean?" suggestions.
 - **CDC** (`crates/tensordb-core/src/cdc/`) — Durable cursors with at-least-once delivery, consumer groups with rebalancing.
@@ -104,8 +101,6 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 - `__meta/vector_index/{table}/{column}` — Vector index metadata (HNSW/IVF-PQ params)
 - `__vec/{table}/{column}/{pk}` — Vector data (raw f32 bytes)
 - `__vec_idx/{table}/{column}/...` — Vector index structures (HNSW graph, IVF centroids, PQ codebook)
-- `__ai/insight/{hex_key}/{commit_ts}` — AI-generated insights
-- `__ai/correlation/{cluster_id}/{commit_ts}/{hex_key}` — AI correlation refs
 - `__meta/policy/{table}/{name}` — Row-level security policies
 - `__meta/plan_guide/{name}` — Plan guide definitions
 - `__audit_log/{timestamp}/{seq}` — Audit log events
@@ -116,11 +111,10 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 - **ShardReadHandle** with `parking_lot::RwLock` enables lock-free concurrent reads
 - **FastWritePath** uses atomic CAS for lock-free writes (falls back to channel if CDC subscribers exist)
 - **DurabilityThread** batches WAL fsyncs across shards (default 1000us interval)
-- **AI runtime thread** processes change events asynchronously
 
 ### Feature Flags
 
-`default = ["llm"]`. Optional: `native` (C++ FFI), `simd`, `io-uring`, `parquet` (Apache Arrow), `encryption` (AES-256-GCM).
+Optional feature flags: `native` (C++ FFI), `simd`, `io-uring`, `parquet` (Apache Arrow), `encryption` (AES-256-GCM).
 
 ## Code Conventions
 
@@ -133,4 +127,4 @@ Every record is an **immutable fact** with: `user_key`, `commit_ts` (system time
 
 ## CI Gates
 
-All must pass: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, `cargo test --workspace --all-targets --features native`, `./scripts/ai_overhead_gate.sh`.
+All must pass: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, `cargo test --workspace --all-targets --features native`.

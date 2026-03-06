@@ -20,9 +20,6 @@ Config {
     sstable_block_bytes: 16_384,          // 16 KB
     bloom_bits_per_key: 10,
     shard_count: 4,
-    ai_auto_insights: false,
-    ai_batch_window_ms: 20,
-    ai_batch_max_events: 16,
     compaction_l0_threshold: 8,
     compaction_l1_target_bytes: 10_485_760, // 10 MB
     compaction_size_ratio: 10,
@@ -30,11 +27,6 @@ Config {
     sstable_max_file_bytes: 67_108_864,   // 64 MB
     block_cache_bytes: 33_554_432,        // 32 MB
     index_cache_entries: 1024,
-    ai_inline_risk_assessment: false,
-    ai_annotate_reads: false,
-    ai_compaction_advisor: false,
-    ai_cache_advisor: false,
-    ai_access_stats_size: 1024,
     fast_write_enabled: true,
     fast_write_wal_batch_interval_us: 1000,
     slow_query_threshold_us: 10_000,         // 10ms
@@ -59,5 +51,3 @@ Config {
 | `shard_count` | Must be > 0 |
 | `compaction_l0_threshold` | Must be > 0 |
 | `compaction_max_levels` | Must be >= 2 |
-| `ai_batch_window_ms` | Must be > 0 when `ai_auto_insights` enabled |
-| `ai_batch_max_events` | Must be > 0 when `ai_auto_insights` enabled |

@@ -2,6 +2,62 @@
 
 All notable changes to TensorDB are documented in this file.
 
+## [0.46] — Category Differentiation
+
+### Added
+- **Learned cost model** (`sql/learned_cost.rs`) — Online linear regression trained from observed query execution, per-plan-type weights via SGD with EMA decay
+- **Anomaly detection** (`ai/anomaly.rs`) — Per-table write rate statistics using exponential moving average, flags events exceeding configurable sigma threshold
+- **Graph queries** (`facet/graph.rs`) — Edge tables with adjacency/reverse adjacency lists, BFS/DFS traversal, shortest path queries, neighbor lookups
+
+## [0.42–0.45] — Distributed & Cloud
+
+### Added
+- **Raft consensus** (`consensus/raft.rs`) — Leader election, vote request/response, log replication with AppendEntries, commit index tracking
+- **Object store** (`storage/object_store.rs`) — `ObjectStore` trait with `LocalObjectStore` (filesystem) and `MemoryObjectStore` (testing) implementations
+- **WAL replication** (`replication/wal_shipper.rs`) — Background WAL frame distribution to followers with per-follower offset tracking and backpressure
+- **C FFI** (`ffi.rs`) — `tensordb_open()`, `tensordb_sql()`, `tensordb_close()`, `tensordb_version()` extern "C" functions for mobile and edge deployment
+
+## [0.39–0.41] — Enterprise Security
+
+### Added
+- **TLS/mTLS** — `rustls`-based TLS termination for pgwire server, mutual TLS via `--tls-ca-cert`, `--ssl-mode=require` enforcement
+- **Encryption key rotation** (`storage/key_manager.rs`) — `KeyManager` with versioned `BTreeMap<u32, EncryptionKey>`, `ROTATE ENCRYPTION KEY` SQL command, column-specific key derivation via HKDF
+- **Audit log tamper detection** — SHA-256 hash chaining on audit events, `VERIFY AUDIT LOG` SQL command returning verified count and broken chain position
+
+## [0.36–0.38] — Performance & Scalability
+
+### Added
+- **Query parallelism** (`sql/parallel.rs`) — Parallel prefix scan across shard read handles via rayon
+- **Batch write optimization** — `ShardCommand::WriteBatchAtomic` with single epoch increment, memtable `insert_batch()` taking write lock once
+- **External merge sort** (`sql/external_sort.rs`) — Spill-to-disk for large ORDER BY via sorted SSTable runs and K-way merge
+- **Expression compilation** (`sql/compiled_expr.rs`) — Pattern-matching common predicates to closures (equality, range, IN-list via HashSet)
+- **Zstd compression** — `CompressionCodec::Zstd` variant, per-level compression policies (LZ4 for L0-L2, Zstd for L3+), `compression-zstd` feature flag
+
+## [0.34–0.35] — Advanced SQL
+
+### Added
+- **Recursive CTEs** — `WITH RECURSIVE` with anchor + recursive member, iterative execution until fixpoint
+- **Foreign key constraints** — `REFERENCES` in column constraints, `FOREIGN KEY` table constraints with ON DELETE CASCADE/RESTRICT/SET NULL
+- **Materialized views** — `CREATE MATERIALIZED VIEW`, `REFRESH MATERIALIZED VIEW`, `DROP MATERIALIZED VIEW`
+- **Generated columns** — `GENERATED ALWAYS AS (expr)` with automatic value computation on INSERT/UPDATE
+- **Triggers** — `CREATE TRIGGER` with BEFORE/AFTER timing and INSERT/UPDATE/DELETE events
+- **User-defined functions** — `CREATE FUNCTION` with SQL body, `DROP FUNCTION`
+- **Native date/time types** — `TIMESTAMP`, `DATE`, `INTERVAL` SQL types with temporal arithmetic (`NOW()`, `DATE_TRUNC()`, `DATE_PART()`, `DATE_ADD()`, `DATE_SUB()`)
+- **JSON/JSONB operations** — `->` (JSON value), `->>` (text extraction), `@>` (containment), `JSON_EXTRACT()`, `JSON_TYPE()`, `JSON_ARRAY_LENGTH()`
+
+## [0.33] — SQL Completeness
+
+### Added
+- **Multi-value INSERT** — `INSERT INTO t VALUES (1,'a'), (2,'b'), (3,'c')` with row count validation
+- **Subqueries in WHERE** — `IN (SELECT ...)`, `EXISTS (SELECT ...)`, scalar subqueries via `materialize_subqueries()`
+- **OFFSET clause** — `LIMIT n OFFSET m` for pagination, propagated through all SELECT paths
+- **IF EXISTS / IF NOT EXISTS** — `CREATE TABLE IF NOT EXISTS`, `DROP TABLE IF EXISTS`, `CREATE INDEX IF NOT EXISTS`, `DROP INDEX IF EXISTS`
+- **SELECT without FROM** — `SELECT 1`, `SELECT CURRENT_TIMESTAMP`, expressions evaluated against dummy context
+- **FULL OUTER JOIN** — `JoinType::FullOuter` combining left outer + right outer with unmatched row tracking
+- **Upsert** — `INSERT ... ON CONFLICT (cols) DO UPDATE SET ...` and `DO NOTHING`
+- **RETURNING on UPDATE/DELETE** — `UpdateReturning` and `DeleteReturning` statement variants
+- **Persistent transaction sessions** — `SqlSessionHandle` for cross-call BEGIN/COMMIT/ROLLBACK, pgwire per-connection session state
+
 ## [0.32] — Error Quality, Security & Audit, Operational Maturity
 
 ### Added
@@ -137,7 +193,7 @@ All notable changes to TensorDB are documented in this file.
 - 25 unit tests across all distributed modules
 
 #### Ecosystem
-- **Dockerfile** — Multi-stage build producing minimal tensordb-server image (no LLM)
+- **Dockerfile** — Multi-stage build producing minimal tensordb-server image
 - **docker-compose.yml** — Ready-to-use setup with volume mount, healthcheck, port mapping
 - **GitHub Actions: publish-crates.yml** — Automated crates.io publishing on release
 - **GitHub Actions: publish-docker.yml** — Automated Docker image publishing to ghcr.io on release
@@ -172,35 +228,6 @@ All notable changes to TensorDB are documented in this file.
 - `advance_epoch()` now bumps all shard commit counters to the epoch value for cross-shard consistency
 - Transaction `COMMIT` stores `max_commit_ts` (maximum across all writes) instead of `last_commit_ts`
 - Query planner: `#[allow(clippy::too_many_arguments)]` on multi-parameter join functions
-
-## [0.2.0] — Embedded LLM: Natural Language → SQL
-
-### Added
-- Embedded Qwen3-0.6B model for natural language to SQL translation via pure-Rust native inference engine
-- `ASK '<question>'` SQL statement — translates NL to SQL and executes in one step
-- `Database::ask()` and `Database::ask_sql()` Rust API methods
-- `PyDatabase.ask()` Python binding returning `{"sql": ..., "result": ...}`
-- `# <question>` prefix in both Rust and Python CLI shells (shows generated SQL, asks to confirm)
-- `LlmEngine` with lazy model loading, greedy sampling, and output cleaning
-- `llm` feature flag (default on) — pure Rust, no C++ dependencies
-- `llm_model_path` and `llm_max_tokens` config fields
-- `LlmNotAvailable` and `LlmError` error variants
-- Schema-aware prompting: gathers table schemas via SHOW TABLES + DESCRIBE before translation
-- **GGUF v3 loader** (`src/ai/gguf.rs`) — mmap-backed zero-copy tensor access, dequantization for Q8_0, Q4_0, F16, F32
-- **BPE tokenizer** (`src/ai/tokenizer.rs`) — vocabulary and merge rules loaded from GGUF metadata, ChatML special tokens
-- **Transformer runtime** (`src/ai/transformer.rs`) — Qwen2 architecture with RMSNorm, GQA attention, RoPE, SwiGLU FFN, KV cache
-- **Token sampler** (`src/ai/sampler.rs`) — greedy (argmax), top-p nucleus sampling, temperature scaling, repetition penalty
-- **SQL grammar decoder** (`src/ai/sql_grammar.rs`) — soft-constraint token filtering that biases generation toward valid SQL
-- **Schema cache** (`src/ai/schema_cache.rs`) — TTL-based schema context caching with DDL invalidation
-- **Table-filtered schema context** — Schema context automatically pruned to relevant tables for optimal small-model performance
-- **Rayon-parallelized matvec** — All matrix-vector multiplies distribute rows across cores for multi-core speedup
-- `llm_context_size`, `llm_schema_cache_ttl_secs`, `llm_grammar_constrained` config fields
-
-### Changed
-- All crate versions bumped to 0.2.0
-- Replaced `llama-cpp-2` C++ FFI dependency with pure-Rust inference engine — no C++ toolchain required
-- Removed `encoding_rs` dependency (using std)
-- DDL statements (CREATE/DROP/ALTER TABLE) now automatically invalidate the LLM schema cache
 
 ## [0.28] — Fast Write Engine
 

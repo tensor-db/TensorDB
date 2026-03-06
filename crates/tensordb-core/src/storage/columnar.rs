@@ -108,6 +108,23 @@ impl TypedValue {
                 serde_json::Value::Array(_) => Ok(TypedValue::Text(val.to_string())),
                 _ => Err(sql_exec_err(format!("cannot convert {val} to VECTOR"))),
             },
+            // Timestamp/Date/Interval stored as integers
+            SqlType::Timestamp | SqlType::Date => match val {
+                serde_json::Value::Number(n) => Ok(TypedValue::Integer(n.as_i64().unwrap_or(0))),
+                serde_json::Value::String(s) => s
+                    .parse::<i64>()
+                    .map(TypedValue::Integer)
+                    .map_err(|_| sql_exec_err(format!("cannot parse '{s}' as TIMESTAMP"))),
+                _ => Err(sql_exec_err(format!("cannot convert {val} to TIMESTAMP"))),
+            },
+            SqlType::Interval => match val {
+                serde_json::Value::Number(n) => Ok(TypedValue::Integer(n.as_i64().unwrap_or(0))),
+                serde_json::Value::String(s) => s
+                    .parse::<i64>()
+                    .map(TypedValue::Integer)
+                    .map_err(|_| sql_exec_err(format!("cannot parse '{s}' as INTERVAL"))),
+                _ => Err(sql_exec_err(format!("cannot convert {val} to INTERVAL"))),
+            },
         }
     }
 }
@@ -239,6 +256,15 @@ pub fn decode_row(data: &[u8], types: &[SqlType]) -> Result<Vec<TypedValue>> {
                 let s = String::from_utf8_lossy(&data[offset..offset + len]).into_owned();
                 offset += len;
                 values.push(TypedValue::Text(s));
+            }
+            // Timestamp/Date/Interval stored as i64 (same as INTEGER)
+            SqlType::Timestamp | SqlType::Date | SqlType::Interval => {
+                if offset + 8 > data.len() {
+                    return Err(sql_exec_err("truncated TIMESTAMP/DATE/INTERVAL"));
+                }
+                let n = i64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                values.push(TypedValue::Integer(n));
             }
         }
     }

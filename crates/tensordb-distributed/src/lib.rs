@@ -25,8 +25,10 @@
 //! interface for network transport (requires `protoc` for codegen).
 
 pub mod config;
+pub mod consensus;
 pub mod error;
 pub mod node;
+pub mod replication;
 
 pub mod discovery;
 pub mod rebalance;

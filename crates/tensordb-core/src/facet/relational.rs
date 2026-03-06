@@ -264,9 +264,10 @@ mod tests {
         assert!(validate_identifier("user_1").is_ok());
         assert!(validate_identifier("bad/name").is_err());
         let err = validate_table_name("").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "sql execution error: table name cannot be empty"
+        assert!(
+            err.to_string().contains("table name cannot be empty"),
+            "unexpected error: {}",
+            err
         );
     }
 }

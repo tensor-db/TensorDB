@@ -21,7 +21,11 @@ use tracing::{error, info};
 use tensordb_core::config::Config;
 use tensordb_core::Database;
 
-fn load_tls_config(cert_path: &str, key_path: &str) -> Arc<rustls::ServerConfig> {
+fn load_tls_config(
+    cert_path: &str,
+    key_path: &str,
+    ca_cert_path: Option<&str>,
+) -> Arc<rustls::ServerConfig> {
     use std::io::BufReader;
 
     let cert_file = std::fs::File::open(cert_path).unwrap_or_else(|e| {
@@ -51,13 +55,44 @@ fn load_tls_config(cert_path: &str, key_path: &str) -> Arc<rustls::ServerConfig>
             std::process::exit(1);
         });
 
-    let config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .unwrap_or_else(|e| {
-            eprintln!("invalid TLS configuration: {e}");
+    let config = if let Some(ca_path) = ca_cert_path {
+        // mTLS: require client certificates verified against CA
+        let ca_file = std::fs::File::open(ca_path).unwrap_or_else(|e| {
+            eprintln!("failed to open CA cert file {ca_path}: {e}");
             std::process::exit(1);
         });
+        let ca_certs: Vec<_> = rustls_pemfile::certs(&mut BufReader::new(ca_file))
+            .filter_map(|r| r.ok())
+            .collect();
+        let mut root_store = rustls::RootCertStore::empty();
+        for ca_cert in ca_certs {
+            root_store.add(ca_cert).unwrap_or_else(|e| {
+                eprintln!("failed to add CA cert: {e}");
+                std::process::exit(1);
+            });
+        }
+        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
+            .build()
+            .unwrap_or_else(|e| {
+                eprintln!("failed to build client verifier: {e}");
+                std::process::exit(1);
+            });
+        rustls::ServerConfig::builder()
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(certs, key)
+            .unwrap_or_else(|e| {
+                eprintln!("invalid mTLS configuration: {e}");
+                std::process::exit(1);
+            })
+    } else {
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .unwrap_or_else(|e| {
+                eprintln!("invalid TLS configuration: {e}");
+                std::process::exit(1);
+            })
+    };
 
     Arc::new(config)
 }
@@ -71,6 +106,8 @@ async fn main() {
     let mut port: u16 = 5433;
     let mut tls_cert: Option<String> = None;
     let mut tls_key: Option<String> = None;
+    let mut tls_ca_cert: Option<String> = None;
+    let mut ssl_mode: String = "prefer".to_string();
 
     // Simple arg parsing
     let mut i = 1;
@@ -115,6 +152,28 @@ async fn main() {
                     std::process::exit(1);
                 }
             }
+            "--tls-ca-cert" => {
+                if i + 1 < args.len() {
+                    tls_ca_cert = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("--tls-ca-cert requires a path argument");
+                    std::process::exit(1);
+                }
+            }
+            "--ssl-mode" => {
+                if i + 1 < args.len() {
+                    ssl_mode = args[i + 1].clone();
+                    if !["disable", "prefer", "require"].contains(&ssl_mode.as_str()) {
+                        eprintln!("--ssl-mode must be one of: disable, prefer, require");
+                        std::process::exit(1);
+                    }
+                    i += 2;
+                } else {
+                    eprintln!("--ssl-mode requires an argument (disable|prefer|require)");
+                    std::process::exit(1);
+                }
+            }
             "--help" | "-h" => {
                 println!("tensordb-server - PostgreSQL wire protocol server for TensorDB");
                 println!();
@@ -125,6 +184,8 @@ async fn main() {
                 println!("  -p, --port <PORT>       Listen port (default: 5433)");
                 println!("      --tls-cert <PATH>   TLS certificate PEM file");
                 println!("      --tls-key <PATH>    TLS private key PEM file");
+                println!("      --tls-ca-cert <PATH> CA certificate for mTLS client verification");
+                println!("      --ssl-mode <MODE>   SSL mode: disable, prefer (default), require");
                 println!("  -h, --help              Show this help");
                 std::process::exit(0);
             }
@@ -138,16 +199,30 @@ async fn main() {
     // Load TLS config if both cert and key are provided
     let tls_acceptor = match (&tls_cert, &tls_key) {
         (Some(cert), Some(key)) => {
-            let config = load_tls_config(cert, key);
-            info!("TLS enabled (cert={cert}, key={key})");
+            let config = load_tls_config(cert, key, tls_ca_cert.as_deref());
+            if tls_ca_cert.is_some() {
+                info!(
+                    "mTLS enabled (cert={cert}, key={key}, ca-cert={})",
+                    tls_ca_cert.as_deref().unwrap_or("")
+                );
+            } else {
+                info!("TLS enabled (cert={cert}, key={key})");
+            }
             Some(tokio_rustls::TlsAcceptor::from(config))
         }
         (Some(_), None) | (None, Some(_)) => {
             eprintln!("both --tls-cert and --tls-key are required for TLS");
             std::process::exit(1);
         }
-        (None, None) => None,
+        (None, None) => {
+            if ssl_mode == "require" {
+                eprintln!("--ssl-mode=require but no TLS certificate provided");
+                std::process::exit(1);
+            }
+            None
+        }
     };
+    let require_tls = ssl_mode == "require";
 
     // Open the database
     info!("opening database at {}", data_dir.display());
@@ -194,7 +269,7 @@ async fn main() {
                 let conn_id = conn_counter.fetch_add(1, Ordering::Relaxed);
                 let tls = tls_acceptor.clone();
                 tokio::spawn(async move {
-                    handler::handle_connection(stream, db, conn_id, tls).await;
+                    handler::handle_connection(stream, db, conn_id, tls, require_tls).await;
                 });
             }
             Err(e) => {

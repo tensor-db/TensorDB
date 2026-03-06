@@ -1,17 +1,17 @@
 ---
 draft: false
 title: Home
-description: The AI-native bitemporal ledger database. 276ns reads. 1.9µs writes. Built in Rust.
+description: The bitemporal ledger database. 276ns reads. 1.9µs writes. Built in Rust.
 template: splash
 head:
   - tag: meta
     attrs:
       property: og:title
-      content: TensorDB — The AI-Native Bitemporal Database
+      content: TensorDB — The Bitemporal Ledger Database
   - tag: meta
     attrs:
       name: twitter:title
-      content: TensorDB — The AI-Native Bitemporal Database
+      content: TensorDB — The Bitemporal Ledger Database
 ---
 
 import Hero from '../../components/Hero.astro';
@@ -37,11 +37,6 @@ Every write is an **immutable fact**. Every fact has a **timeline**. No data is 
     title="Bitemporal by Default"
     description="Separate system time (when recorded) from business time (when valid). Time-travel with AS OF and VALID AT."
     href="/concepts/bitemporal/"
-  />
-  <FeatureCard
-    title="AI-Native Runtime"
-    description="Embedded Tier-0 AI with inline risk scoring, auto-insights, query advisor, cache advisor, and compaction advisor."
-    href="/ai/"
   />
   <FeatureCard
     title="Vector Search"

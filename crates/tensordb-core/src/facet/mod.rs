@@ -1,5 +1,6 @@
 pub mod event_sourcing;
 pub mod fts;
+pub mod graph;
 pub mod relational;
 pub mod schema_evolution;
 pub mod timeseries;

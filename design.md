@@ -11,7 +11,7 @@ This matters because most databases only keep the latest state. If you need audi
 - **"What did we know at time T?"** — System time query (`AS OF`)
 - **"What was true at time T?"** — Business time query (`VALID AT`)
 
-TensorDB wraps this in a full SQL engine with joins, aggregates, window functions, full-text search, vector search, time-series analytics, and an embedded AI runtime — all in a single Rust library you can embed in any application.
+TensorDB wraps this in a full SQL engine with joins, aggregates, window functions, full-text search, vector search, and time-series analytics — all in a single Rust library you can embed in any application.
 
 ---
 
@@ -82,12 +82,6 @@ The `0x00` separator allows prefix scans to find all versions of a key. Big-endi
 │  Group-Commit WAL ──► Memtable ──► SSTable (LZ4, bloom, mmap)  │
 │  L0 ──► L1 ──► ... ──► L6 (multi-level compaction)             │
 │  Block Cache (LRU) │ Index Cache │ Zone Maps │ Fractal Index    │
-└─────────────────────────────────────────────────────────────────┘
-              │
-┌─────────────▼───────────────────────────────────────────────────┐
-│                     AI Runtime                                  │
-│  Insight Synthesis │ Risk Scoring │ Advisors │ ML Pipeline      │
-│  Inference Engine │ RAG Pipeline │ Feature Store                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -340,7 +334,7 @@ The parser (`sql/parser.rs`, ~2,700 lines) converts SQL text into an AST. It han
 
 **Transactions:** `BEGIN`, `COMMIT`, `ROLLBACK`
 
-**Introspection:** `SHOW TABLES`, `DESCRIBE table`, `EXPLAIN`, `EXPLAIN ANALYZE`, `EXPLAIN AI`, `ANALYZE table`
+**Introspection:** `SHOW TABLES`, `DESCRIBE table`, `EXPLAIN`, `EXPLAIN ANALYZE`, `ANALYZE table`
 
 **Prepared statements:** `$1`, `$2`, ... positional parameter placeholders
 
@@ -553,47 +547,6 @@ Kafka-style partition assignment for parallel consumption:
 - Rebalancing on consumer join/leave with generation tracking
 - Each consumer in a group processes a disjoint subset of shards
 
-**Isolation:** AI internal writes (under `__ai/` prefix) are automatically filtered from user-facing change feeds.
-
----
-
-## AI Runtime
-
-The AI runtime is embedded directly in the database engine. No external model servers, no network calls, no separate processes. It runs in-process alongside the storage engine.
-
-### Insight Synthesis
-
-When `ai_auto_insights` is enabled, a background thread consumes shard change-feed events, micro-batches them (configurable window and max events), and synthesizes operational insights. Insights are stored as immutable facts under `__ai/insight/...` and are queryable via `EXPLAIN AI '<key>'`.
-
-### Inline Risk Scoring
-
-When `ai_inline_risk_assessment` is enabled, every write gets a risk score computed synchronously before acknowledgment. High-risk writes are flagged for review.
-
-### AI Advisors
-
-Three advisors observe database behavior and make recommendations:
-
-- **Compaction advisor** — Observes read patterns and recommends compaction priorities for key ranges with high read amplification
-- **Cache advisor** — Uses Count-Min Sketch for hot-key frequency estimation, recommends cache size adjustments based on hit ratio and working set size
-- **Query advisor** — Analyzes query patterns and suggests index creation or query rewrites
-
-### Inference Engine
-
-The inference engine (`ai/inference.rs`, ~1,300 lines) provides:
-
-- **Scoring functions** — Configurable linear models with activations (Sigmoid, ReLU, Softmax). Weight matrices stored as row-major `Vec<f32>`.
-- **RAG pipeline** — Document chunking at sentence boundaries, TF-IDF keyword scoring, hybrid retrieval combining vector similarity + BM25, configurable fusion weights.
-
-**Softmax** uses numerically stable computation: `exp(x[i] - max(x)) / sum(exp(x[j] - max(x)))`.
-
-### ML Pipeline
-
-The ML pipeline (`ai/ml_pipeline.rs`, ~960 lines) provides:
-
-- **Feature store** — Create named feature sets, ingest per-entity features, point-in-time joins (filters by `updated_at <= as_of`).
-- **Model registry** — Versioned model lifecycle: Registered → Validated → Deployed → Deprecated → Archived. Tracks inference count and average latency.
-- **Pipeline advisor** — Monitors accuracy (retrain threshold: 0.7), feature staleness (refresh threshold: 0.5), and overall health score (0.4 × freshness + 0.6 × accuracy).
-
 ---
 
 ## Cluster Architecture
@@ -754,7 +707,6 @@ TensorDB uses key prefixes to organize internal and user data:
 | `__meta/table/<name>` | Table metadata (schema, columns) |
 | `__meta/view/<name>` | View definitions |
 | `__meta/index/<table>/<name>` | Index metadata |
-| `__ai/insight/...` | AI-synthesized insights |
 | `__cdc/cursor/<id>` | Durable cursor positions |
 | `__es/data/<store>/<agg>/<seq>` | Event sourcing events |
 | `__es/snap/<store>/<agg>/latest` | Event sourcing snapshots |
@@ -774,5 +726,4 @@ These properties hold at all times and are the foundation of TensorDB's correctn
 4. **SSTable immutability** — Once published, an SSTable is never modified. Compaction creates new files and atomically updates the manifest.
 5. **Manifest atomicity** — The manifest is replaced via write-temp/fsync/rename/fsync-dir. No partial state is visible.
 6. **Deterministic recovery** — Manifest + WAL replay reproduces the exact visible state.
-7. **AI isolation** — Internal AI facts (`__ai/...`) never appear in user-facing change feeds.
-8. **Read consistency** — `ShardReadHandle` reads are consistent within a single `get_visible()` call (snapshot of memtable + levels at read time).
+7. **Read consistency** — `ShardReadHandle` reads are consistent within a single `get_visible()` call (snapshot of memtable + levels at read time).

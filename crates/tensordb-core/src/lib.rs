@@ -6,6 +6,7 @@ pub mod config;
 pub mod engine;
 pub mod error;
 pub mod facet;
+pub mod ffi;
 pub mod io;
 pub mod ledger;
 pub mod native_bridge;
@@ -24,7 +25,7 @@ pub use crate::engine::db::{
 };
 pub use crate::engine::shard::{ChangeEvent, GetResult, ShardReadHandle, WriteBatchItem};
 pub use crate::error::{sql_exec_err, sql_parse_err, ErrorCode, Result, SqlError, TensorError};
-pub use crate::sql::exec::{ColumnStatistics, PreparedStatement, TableStats};
+pub use crate::sql::exec::{ColumnStatistics, PreparedStatement, SqlSessionHandle, TableStats};
 pub use crate::sql::planner::{explain_plan, generate_plan, PlanNode};
 pub use crate::sql::vectorized::{
     vectorized_filter, vectorized_hash_aggregate, vectorized_hash_join, vectorized_limit,

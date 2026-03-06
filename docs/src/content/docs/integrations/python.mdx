@@ -77,8 +77,6 @@ results = db.sql(
 config = tensordb.Config()
 config.shard_count = 8
 config.memtable_max_bytes = 8 * 1024 * 1024
-config.ai_auto_insights = True
-
 db = tensordb.open("my_data", config=config)
 ```
 

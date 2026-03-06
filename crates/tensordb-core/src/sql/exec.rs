@@ -104,7 +104,7 @@ fn collect_statement_tables(stmt: &Statement) -> Vec<String> {
     match stmt {
         Statement::Select { from, joins, .. } => {
             let mut tables = Vec::new();
-            if let TableRef::Named { name: t, .. } = from {
+            if let Some(TableRef::Named { name: t, .. }) = from {
                 tables.push(t.clone());
             }
             for js in joins {
@@ -237,6 +237,7 @@ fn substitute_params(stmt: Statement, params: &[&str]) -> Statement {
             having,
             order_by,
             limit,
+            offset,
         } => Statement::Select {
             ctes,
             from,
@@ -258,6 +259,7 @@ fn substitute_params(stmt: Statement, params: &[&str]) -> Statement {
                     .collect()
             }),
             limit,
+            offset,
         },
         other => other, // Other statement types: pass through
     }
@@ -651,6 +653,57 @@ impl SqlSession {
     }
 }
 
+/// A persistent SQL session handle that maintains transaction state across
+/// multiple `sql_session()` calls. Used by the pgwire server for connection-scoped
+/// transactions (BEGIN/COMMIT/ROLLBACK spanning multiple queries).
+pub struct SqlSessionHandle {
+    session: SqlSession,
+}
+
+impl SqlSessionHandle {
+    pub fn new() -> Self {
+        SqlSessionHandle {
+            session: SqlSession::default(),
+        }
+    }
+
+    pub fn in_transaction(&self) -> bool {
+        self.session.in_txn
+    }
+}
+
+impl Default for SqlSessionHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Execute a SQL query using a persistent session handle (does not error on
+/// open transactions at the end — the caller manages transaction lifecycle).
+pub fn execute_sql_with_session(
+    db: &Database,
+    handle: &mut SqlSessionHandle,
+    query: &str,
+) -> Result<SqlResult> {
+    use crate::sql::parser::parse_sql;
+    use crate::sql::planner::plan;
+
+    let statements = split_sql_statements(query)?;
+    let mut last_result = SqlResult::Affected {
+        rows: 0,
+        commit_ts: None,
+        message: "no-op".to_string(),
+    };
+
+    for sql in &statements {
+        let stmt = parse_sql(sql)?;
+        let stmt = plan(stmt)?;
+        last_result = execute_stmt(db, &mut handle.session, stmt)?;
+    }
+
+    Ok(last_result)
+}
+
 #[derive(Debug, Clone)]
 pub struct VisibleRow {
     pub pk: String,
@@ -880,10 +933,21 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                 message: format!("RELEASE {name}"),
             })
         }
-        Statement::CreateTable { table, columns } => {
+        Statement::CreateTable {
+            table,
+            columns,
+            if_not_exists,
+        } => {
             validate_table_name(&table)?;
             let key = table_meta_key(&table);
             if read_live_key(db, session, &key, None, None)?.is_some() {
+                if if_not_exists {
+                    return Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("table {table} already exists (IF NOT EXISTS)"),
+                    });
+                }
                 return Err(sql_exec_err(format!("table {table} already exists")));
             }
 
@@ -1018,6 +1082,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             table,
             columns,
             unique,
+            if_not_exists,
         } => {
             validate_index_name(&index)?;
             validate_table_name(&table)?;
@@ -1042,6 +1107,13 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
 
             let key = index_meta_key(&table, &index);
             if read_live_key(db, session, &key, None, None)?.is_some() {
+                if if_not_exists {
+                    return Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("index {index} already exists (IF NOT EXISTS)"),
+                    });
+                }
                 return Err(sql_exec_err(format!("index {index} already exists")));
             }
 
@@ -1117,9 +1189,9 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
         Statement::InsertReturning {
             table,
             columns,
-            values,
+            rows,
             returning,
-        } => execute_insert_returning(db, session, &table, columns, values, &returning),
+        } => execute_insert_returning(db, session, &table, columns, rows, &returning),
         Statement::CreateTableAs { table, query } => {
             execute_create_table_as(db, session, &table, *query)
         }
@@ -1199,57 +1271,63 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
         Statement::InsertTyped {
             table,
             columns,
-            values,
+            rows,
         } => {
             validate_table_name(&table)?;
             let schema = load_table_schema(db, session, &table)?;
 
-            // Build JSON from column names and value expressions
-            let mut json_obj = serde_json::Map::new();
-            let mut pk_val = None;
+            let mut count = 0u64;
+            let mut last_commit_ts = None;
+            for values in &rows {
+                // Build JSON from column names and value expressions
+                let mut json_obj = serde_json::Map::new();
+                let mut pk_val = None;
 
-            for (col_name, val_expr) in columns.iter().zip(values.iter()) {
-                let val = eval_const_expr(val_expr)?;
-                let json_val = sql_value_to_json(&val);
+                for (col_name, val_expr) in columns.iter().zip(values.iter()) {
+                    let val = eval_const_expr(val_expr)?;
+                    let json_val = sql_value_to_json(&val);
 
-                if col_name.eq_ignore_ascii_case(&schema.pk) {
-                    pk_val = Some(match &val {
-                        SqlValue::Text(s) => s.clone(),
-                        SqlValue::Number(n) => n.to_string(),
-                        _ => {
-                            return Err(sql_exec_err(
-                                "primary key must be text or number".to_string(),
-                            ))
-                        }
-                    });
+                    if col_name.eq_ignore_ascii_case(&schema.pk) {
+                        pk_val = Some(match &val {
+                            SqlValue::Text(s) => s.clone(),
+                            SqlValue::Number(n) => n.to_string(),
+                            _ => {
+                                return Err(sql_exec_err(
+                                    "primary key must be text or number".to_string(),
+                                ))
+                            }
+                        });
+                    }
+
+                    json_obj.insert(col_name.clone(), json_val);
                 }
 
-                json_obj.insert(col_name.clone(), json_val);
+                let pk = pk_val.ok_or_else(|| {
+                    sql_exec_err(format!(
+                        "INSERT must include primary key column '{}'",
+                        schema.pk
+                    ))
+                })?;
+                validate_pk(&pk)?;
+
+                let doc = serde_json::to_vec(&serde_json::Value::Object(json_obj))?;
+                let key = row_key(&table, &pk);
+                let ts = write_put(db, session, key, doc.clone(), 0, u64::MAX, Some(1))?;
+                last_commit_ts = ts.or(last_commit_ts);
+                // Update FTS indexes
+                update_fts_indexes(db, session, &table, &pk, &doc)?;
+                // Update time-series buckets
+                update_ts_buckets(db, session, &table, &doc)?;
+                // Update secondary indexes
+                update_secondary_indexes(db, session, &table, &pk, &doc)?;
+                // Update vector indexes
+                update_vector_indexes(db, session, &table, &pk, &doc)?;
+                count += 1;
             }
-
-            let pk = pk_val.ok_or_else(|| {
-                sql_exec_err(format!(
-                    "INSERT must include primary key column '{}'",
-                    schema.pk
-                ))
-            })?;
-            validate_pk(&pk)?;
-
-            let doc = serde_json::to_vec(&serde_json::Value::Object(json_obj))?;
-            let key = row_key(&table, &pk);
-            let commit_ts = write_put(db, session, key, doc.clone(), 0, u64::MAX, Some(1))?;
-            // Update FTS indexes
-            update_fts_indexes(db, session, &table, &pk, &doc)?;
-            // Update time-series buckets
-            update_ts_buckets(db, session, &table, &doc)?;
-            // Update secondary indexes
-            update_secondary_indexes(db, session, &table, &pk, &doc)?;
-            // Update vector indexes
-            update_vector_indexes(db, session, &table, &pk, &doc)?;
             Ok(SqlResult::Affected {
-                rows: 1,
-                commit_ts,
-                message: "inserted 1 row".to_string(),
+                rows: count,
+                commit_ts: last_commit_ts,
+                message: format!("inserted {count} row(s)"),
             })
         }
         Statement::Update {
@@ -1544,10 +1622,17 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             }
             Ok(SqlResult::Rows(rows))
         }
-        Statement::DropTable { table } => {
+        Statement::DropTable { table, if_exists } => {
             validate_table_name(&table)?;
             let key = table_meta_key(&table);
             if read_live_key(db, session, &key, None, None)?.is_none() {
+                if if_exists {
+                    return Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("table {table} does not exist (IF EXISTS)"),
+                    });
+                }
                 return Err(sql_exec_err(format!("table {table} does not exist")));
             }
 
@@ -1629,11 +1714,22 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                 },
             })
         }
-        Statement::DropIndex { index, table } => {
+        Statement::DropIndex {
+            index,
+            table,
+            if_exists,
+        } => {
             validate_index_name(&index)?;
             validate_table_name(&table)?;
             let key = index_meta_key(&table, &index);
             if read_live_key(db, session, &key, None, None)?.is_none() {
+                if if_exists {
+                    return Ok(SqlResult::Affected {
+                        rows: 0,
+                        commit_ts: None,
+                        message: format!("index {index} does not exist (IF EXISTS)"),
+                    });
+                }
                 return Err(sql_exec_err(format!("index {index} does not exist")));
             }
             // Remove all __idx/<table>/<index>/ entries
@@ -1689,6 +1785,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             having,
             order_by,
             limit,
+            offset,
         } => execute_select(
             db,
             session,
@@ -1705,6 +1802,7 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
             having,
             order_by,
             limit,
+            offset,
         ),
         Statement::Explain(inner) => execute_explain(db, session, *inner),
         Statement::ExplainAnalyze(inner) => execute_explain_analyze(db, session, *inner),
@@ -1804,6 +1902,32 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
         Statement::SuggestIndex { query } => execute_suggest_index(db, session, &query),
         // --- Phase 2: VERIFY BACKUP ---
         Statement::VerifyBackup { path } => execute_verify_backup(db, &path),
+        // --- Phase 4: ROTATE ENCRYPTION KEY ---
+        Statement::RotateEncryptionKey { passphrase } => {
+            let new_key = crate::storage::encryption::EncryptionKey::from_passphrase(&passphrase);
+            let version = db.key_manager().rotate_key(new_key);
+            let row = serde_json::json!({
+                "status": "OK",
+                "new_version": version,
+                "message": format!("Encryption key rotated to version {version}"),
+            })
+            .to_string()
+            .into_bytes();
+            Ok(SqlResult::Rows(vec![row]))
+        }
+        // --- Phase 4: VERIFY AUDIT LOG ---
+        Statement::VerifyAuditLog => {
+            let result = db.audit_log().verify(db)?;
+            let row = serde_json::json!({
+                "verified": result.verified,
+                "total": result.total,
+                "broken_at": result.broken_at,
+                "status": if result.broken_at.is_none() { "OK" } else { "BROKEN" },
+            })
+            .to_string()
+            .into_bytes();
+            Ok(SqlResult::Rows(vec![row]))
+        }
         // --- Phase 2: VACUUM ---
         Statement::Vacuum { table } => execute_vacuum(db, session, table.as_deref()),
         // --- Phase 2+4: SHOW extensions ---
@@ -1936,6 +2060,38 @@ fn execute_stmt(db: &Database, session: &mut SqlSession, stmt: Statement) -> Res
                 message: format!("dropped plan guide '{name}'"),
             })
         }
+        Statement::UpdateReturning {
+            table,
+            set_doc,
+            set_assignments,
+            filter,
+            as_of,
+            valid_at,
+            returning,
+        } => execute_update_returning(
+            db,
+            session,
+            &table,
+            set_doc,
+            set_assignments,
+            filter,
+            as_of,
+            valid_at,
+            &returning,
+        ),
+        Statement::DeleteReturning {
+            table,
+            filter,
+            as_of,
+            valid_at,
+            returning,
+        } => execute_delete_returning(db, session, &table, filter, as_of, valid_at, &returning),
+        Statement::Upsert {
+            table,
+            columns,
+            rows,
+            on_conflict,
+        } => execute_upsert(db, session, &table, columns, rows, on_conflict),
     }
 }
 
@@ -1988,7 +2144,7 @@ fn execute_select(
     db: &Database,
     session: &mut SqlSession,
     ctes: Vec<crate::sql::parser::CteClause>,
-    from: TableRef,
+    from: Option<TableRef>,
     items: Vec<SelectItem>,
     joins: Vec<JoinSpec>,
     filter: Option<Expr>,
@@ -2000,7 +2156,27 @@ fn execute_select(
     having: Option<Expr>,
     order_by: Option<Vec<(Expr, OrderDirection)>>,
     limit: Option<u64>,
+    offset: Option<u64>,
 ) -> Result<SqlResult> {
+    // SELECT without FROM: evaluate expressions against empty context
+    if from.is_none() {
+        let empty_doc = b"{}";
+        let mut row_json = serde_json::Map::new();
+        for item in &items {
+            match item {
+                SelectItem::Expr { expr, alias } => {
+                    let mut ctx = EvalContext::new("", empty_doc);
+                    let val = ctx.eval(expr)?;
+                    let col_name = alias.clone().unwrap_or_else(|| expr_display_name(expr));
+                    row_json.insert(col_name, sql_value_to_json(&val));
+                }
+                SelectItem::AllColumns => {}
+            }
+        }
+        let row_bytes = serde_json::to_vec(&serde_json::Value::Object(row_json))?;
+        return Ok(SqlResult::Rows(vec![row_bytes]));
+    }
+    let from = from.unwrap();
     // Resolve SQL:2011 temporal clauses into as_of/valid_at overrides
     let (mut as_of, valid_at) = resolve_temporal_clauses(as_of, valid_at, &temporal)?;
 
@@ -2023,20 +2199,88 @@ fn execute_select(
     // Evaluate CTEs first
     let mut cte_data: HashMap<String, Vec<VisibleRow>> = HashMap::new();
     for cte in &ctes {
-        let result = execute_stmt(db, session, *cte.query.clone())?;
-        match result {
-            SqlResult::Rows(rows) => {
-                let visible_rows: Vec<VisibleRow> = rows
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, doc)| VisibleRow {
-                        pk: i.to_string(),
-                        doc,
-                    })
-                    .collect();
-                cte_data.insert(cte.name.clone(), visible_rows);
+        if cte.recursive {
+            // Recursive CTE: the query should be a UNION ALL of anchor + recursive part
+            // Execute the query once to get anchor results, then iterate
+            let cte_name = cte.name.clone();
+            // For recursive CTEs with UNION ALL, we need to detect the SetOp
+            // and iterate the recursive part until no new rows are produced.
+            if let Statement::SetOp { op: _, left, right } = *cte.query.clone() {
+                // Execute anchor (left side)
+                let anchor_result = execute_stmt(db, session, *left)?;
+                let mut all_rows: Vec<VisibleRow> = match anchor_result {
+                    SqlResult::Rows(rows) => rows
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, doc)| VisibleRow {
+                            pk: i.to_string(),
+                            doc,
+                        })
+                        .collect(),
+                    _ => vec![],
+                };
+                let mut working_table = all_rows.clone();
+                let max_iterations = 100; // Safety limit
+                for _ in 0..max_iterations {
+                    if working_table.is_empty() {
+                        break;
+                    }
+                    // Store current working table as the CTE for the recursive part
+                    cte_data.insert(cte_name.clone(), working_table.clone());
+                    // Execute recursive part
+                    let rec_result = execute_stmt(db, session, *right.clone())?;
+                    let new_rows: Vec<VisibleRow> = match rec_result {
+                        SqlResult::Rows(rows) => rows
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, doc)| VisibleRow {
+                                pk: (all_rows.len() + i).to_string(),
+                                doc,
+                            })
+                            .collect(),
+                        _ => vec![],
+                    };
+                    if new_rows.is_empty() {
+                        break;
+                    }
+                    all_rows.extend(new_rows.clone());
+                    working_table = new_rows;
+                }
+                cte_data.insert(cte_name, all_rows);
+            } else {
+                // Non-UNION recursive CTE: just execute once
+                let result = execute_stmt(db, session, *cte.query.clone())?;
+                match result {
+                    SqlResult::Rows(rows) => {
+                        let visible_rows: Vec<VisibleRow> = rows
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, doc)| VisibleRow {
+                                pk: i.to_string(),
+                                doc,
+                            })
+                            .collect();
+                        cte_data.insert(cte_name, visible_rows);
+                    }
+                    _ => return Err(sql_exec_err("CTE must be a SELECT statement")),
+                }
             }
-            _ => return Err(sql_exec_err("CTE must be a SELECT statement".to_string())),
+        } else {
+            let result = execute_stmt(db, session, *cte.query.clone())?;
+            match result {
+                SqlResult::Rows(rows) => {
+                    let visible_rows: Vec<VisibleRow> = rows
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, doc)| VisibleRow {
+                            pk: i.to_string(),
+                            doc,
+                        })
+                        .collect();
+                    cte_data.insert(cte.name.clone(), visible_rows);
+                }
+                _ => return Err(sql_exec_err("CTE must be a SELECT statement")),
+            }
         }
     }
 
@@ -2139,6 +2383,13 @@ fn execute_select(
         (items, filter, group_by, having, order_by)
     } else {
         (items, filter, group_by, having, order_by)
+    };
+
+    // Materialize subqueries in filter before applying
+    let filter = if let Some(f) = filter {
+        Some(materialize_subqueries(db, session, f)?)
+    } else {
+        None
     };
 
     // Check if this is a CTE reference (or table function result)
@@ -2303,6 +2554,16 @@ fn execute_select(
             }
             std::cmp::Ordering::Equal
         });
+    }
+
+    // Apply OFFSET
+    if let Some(off) = offset {
+        let off = usize::try_from(off).unwrap_or(usize::MAX);
+        if off < rows.len() {
+            rows = rows.split_off(off);
+        } else {
+            rows.clear();
+        }
     }
 
     // Apply LIMIT
@@ -2907,6 +3168,8 @@ fn to_literal(val: &SqlValue) -> Expr {
             use rust_decimal::prelude::ToPrimitive;
             Expr::NumberLit(d.to_f64().unwrap_or(0.0))
         }
+        SqlValue::Timestamp(t) => Expr::NumberLit(*t as f64),
+        SqlValue::Interval(i) => Expr::NumberLit(*i as f64),
     }
 }
 
@@ -3762,6 +4025,16 @@ fn execute_single_join(
         JoinType::Cross => {
             let right_rows = fetch_right(pk_from_filter)?;
             Ok(cross_join(left_rows.to_vec(), right_rows))
+        }
+        JoinType::FullOuter => {
+            let right_rows = fetch_right(pk_from_filter)?;
+            Ok(nested_loop_join(
+                left_rows.to_vec(),
+                right_rows,
+                &join_spec.on_clause,
+                true, // left outer
+                true, // right outer
+            ))
         }
     }
 }
@@ -5685,9 +5958,9 @@ fn execute_explain(db: &Database, session: &mut SqlSession, inner: Statement) ->
             let mut output = plan_output;
 
             // For point lookups, also include storage-level detail
-            if let TableRef::Named {
+            if let Some(TableRef::Named {
                 name: ref table, ..
-            } = from
+            }) = from
             {
                 let is_doc_only = detect_legacy_projection(items)
                     .map(|l| matches!(l, LegacyProjection::Doc))
@@ -6219,7 +6492,7 @@ fn resolve_select_target(
         let meta: ViewMetadata = serde_json::from_slice(&bytes)?;
         let view_stmt = parse_sql(&meta.query)?;
         if let Statement::Select {
-            from: TableRef::Named { name: table, .. },
+            from: Some(TableRef::Named { name: table, .. }),
             filter,
             as_of: view_as_of,
             valid_at: view_valid_at,
@@ -6459,78 +6732,403 @@ fn execute_insert_returning(
     session: &mut SqlSession,
     table: &str,
     columns: Vec<String>,
-    values: Vec<Expr>,
+    rows: Vec<Vec<Expr>>,
     returning: &[SelectItem],
 ) -> Result<SqlResult> {
     validate_table_name(table)?;
     let schema = load_table_schema(db, session, table)?;
 
-    // Build JSON from column names and value expressions
-    let mut json_obj = serde_json::Map::new();
-    let mut pk_val = None;
+    let mut result_rows = Vec::new();
+    for values in &rows {
+        let mut json_obj = serde_json::Map::new();
+        let mut pk_val = None;
 
-    for (col_name, val_expr) in columns.iter().zip(values.iter()) {
-        let val = eval_const_expr(val_expr)?;
-        let json_val = sql_value_to_json(&val);
+        for (col_name, val_expr) in columns.iter().zip(values.iter()) {
+            let val = eval_const_expr(val_expr)?;
+            let json_val = sql_value_to_json(&val);
 
-        if col_name.eq_ignore_ascii_case(&schema.pk) {
-            pk_val = Some(match &val {
-                SqlValue::Text(s) => s.clone(),
-                SqlValue::Number(n) => n.to_string(),
-                _ => {
-                    return Err(sql_exec_err(
-                        "primary key must be text or number".to_string(),
-                    ))
-                }
-            });
+            if col_name.eq_ignore_ascii_case(&schema.pk) {
+                pk_val = Some(match &val {
+                    SqlValue::Text(s) => s.clone(),
+                    SqlValue::Number(n) => n.to_string(),
+                    _ => {
+                        return Err(sql_exec_err(
+                            "primary key must be text or number".to_string(),
+                        ))
+                    }
+                });
+            }
+
+            json_obj.insert(col_name.clone(), json_val);
         }
 
-        json_obj.insert(col_name.clone(), json_val);
-    }
+        let pk = pk_val.ok_or_else(|| {
+            sql_exec_err(format!(
+                "INSERT must include primary key column '{}'",
+                schema.pk
+            ))
+        })?;
+        validate_pk(&pk)?;
 
-    let pk = pk_val.ok_or_else(|| {
-        sql_exec_err(format!(
-            "INSERT must include primary key column '{}'",
-            schema.pk
-        ))
-    })?;
-    validate_pk(&pk)?;
+        let doc = serde_json::to_vec(&serde_json::Value::Object(json_obj))?;
+        let key = row_key(table, &pk);
+        write_put(db, session, key, doc.clone(), 0, u64::MAX, Some(1))?;
+        update_fts_indexes(db, session, table, &pk, &doc)?;
+        update_ts_buckets(db, session, table, &doc)?;
+        update_vector_indexes(db, session, table, &pk, &doc)?;
 
-    let doc = serde_json::to_vec(&serde_json::Value::Object(json_obj))?;
-    let key = row_key(table, &pk);
-    write_put(db, session, key, doc.clone(), 0, u64::MAX, Some(1))?;
-    // Update FTS indexes
-    update_fts_indexes(db, session, table, &pk, &doc)?;
-    // Update time-series buckets
-    update_ts_buckets(db, session, table, &doc)?;
-    // Update vector indexes
-    update_vector_indexes(db, session, table, &pk, &doc)?;
-
-    // Build RETURNING result
-    let mut ctx = EvalContext::new(&pk, &doc);
-    let mut row_json = serde_json::Map::new();
-    for item in returning {
-        match item {
-            SelectItem::AllColumns => {
-                // Return all columns
-                if let Ok(serde_json::Value::Object(map)) =
-                    serde_json::from_slice::<serde_json::Value>(&doc)
-                {
-                    for (k, v) in map {
-                        row_json.insert(k, v);
+        // Build RETURNING result for this row
+        let mut ctx = EvalContext::new(&pk, &doc);
+        let mut row_json = serde_json::Map::new();
+        for item in returning {
+            match item {
+                SelectItem::AllColumns => {
+                    if let Ok(serde_json::Value::Object(map)) =
+                        serde_json::from_slice::<serde_json::Value>(&doc)
+                    {
+                        for (k, v) in map {
+                            row_json.insert(k, v);
+                        }
                     }
                 }
-            }
-            SelectItem::Expr { expr, alias } => {
-                let val = ctx.eval(expr)?;
-                let col_name = alias.clone().unwrap_or_else(|| expr_display_name(expr));
-                row_json.insert(col_name, sql_value_to_json(&val));
+                SelectItem::Expr { expr, alias } => {
+                    let val = ctx.eval(expr)?;
+                    let col_name = alias.clone().unwrap_or_else(|| expr_display_name(expr));
+                    row_json.insert(col_name, sql_value_to_json(&val));
+                }
             }
         }
+        result_rows.push(serde_json::to_vec(&serde_json::Value::Object(row_json))?);
     }
 
-    let row_bytes = serde_json::to_vec(&serde_json::Value::Object(row_json))?;
-    Ok(SqlResult::Rows(vec![row_bytes]))
+    Ok(SqlResult::Rows(result_rows))
+}
+
+// ---------- UPDATE ... RETURNING ----------
+
+#[allow(clippy::too_many_arguments)]
+fn execute_update_returning(
+    db: &Database,
+    session: &mut SqlSession,
+    table: &str,
+    set_doc: Expr,
+    set_assignments: Vec<(String, Expr)>,
+    filter: Option<Expr>,
+    as_of: Option<u64>,
+    valid_at: Option<u64>,
+    returning: &[SelectItem],
+) -> Result<SqlResult> {
+    validate_table_name(table)?;
+    let _schema = load_table_schema(db, session, table)?;
+
+    let rows = fetch_rows_for_table(db, session, table, None, as_of, valid_at)?;
+    let rows = if let Some(ref f) = filter {
+        filter_rows(rows, f)?
+    } else {
+        rows
+    };
+
+    let mut result_rows = Vec::new();
+    for row in &rows {
+        let new_doc = if !set_assignments.is_empty() {
+            let mut doc_val: serde_json::Value = serde_json::from_slice(&row.doc)
+                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+            if let serde_json::Value::Object(ref mut map) = doc_val {
+                for (col, val_expr) in &set_assignments {
+                    let mut ctx = EvalContext::new(&row.pk, &row.doc);
+                    let val = ctx.eval(val_expr)?;
+                    map.insert(col.clone(), sql_value_to_json(&val));
+                }
+            }
+            serde_json::to_vec(&doc_val)?
+        } else {
+            let mut ctx = EvalContext::new(&row.pk, &row.doc);
+            let val = ctx.eval(&set_doc)?;
+            match val {
+                SqlValue::Text(s) => {
+                    validate_json_bytes(s.as_bytes())?;
+                    s.into_bytes()
+                }
+                _ => return Err(sql_exec_err("UPDATE SET doc must evaluate to a string")),
+            }
+        };
+
+        remove_secondary_indexes(db, session, table, &row.pk, &row.doc)?;
+        remove_vector_indexes(db, session, table, &row.pk)?;
+        let key = row_key(table, &row.pk);
+        write_put(db, session, key, new_doc.clone(), 0, u64::MAX, Some(1))?;
+        update_secondary_indexes(db, session, table, &row.pk, &new_doc)?;
+        update_vector_indexes(db, session, table, &row.pk, &new_doc)?;
+
+        // Build RETURNING result
+        let mut ctx = EvalContext::new(&row.pk, &new_doc);
+        let mut row_json = serde_json::Map::new();
+        for item in returning {
+            match item {
+                SelectItem::AllColumns => {
+                    if let Ok(serde_json::Value::Object(map)) =
+                        serde_json::from_slice::<serde_json::Value>(&new_doc)
+                    {
+                        for (k, v) in map {
+                            row_json.insert(k, v);
+                        }
+                    }
+                }
+                SelectItem::Expr { expr, alias } => {
+                    let val = ctx.eval(expr)?;
+                    let col_name = alias.clone().unwrap_or_else(|| expr_display_name(expr));
+                    row_json.insert(col_name, sql_value_to_json(&val));
+                }
+            }
+        }
+        result_rows.push(serde_json::to_vec(&serde_json::Value::Object(row_json))?);
+    }
+
+    Ok(SqlResult::Rows(result_rows))
+}
+
+// ---------- DELETE ... RETURNING ----------
+
+fn execute_delete_returning(
+    db: &Database,
+    session: &mut SqlSession,
+    table: &str,
+    filter: Option<Expr>,
+    as_of: Option<u64>,
+    valid_at: Option<u64>,
+    returning: &[SelectItem],
+) -> Result<SqlResult> {
+    validate_table_name(table)?;
+    let _schema = load_table_schema(db, session, table)?;
+
+    let rows = fetch_rows_for_table(db, session, table, None, as_of, valid_at)?;
+    let rows = if let Some(ref f) = filter {
+        filter_rows(rows, f)?
+    } else {
+        rows
+    };
+
+    let mut result_rows = Vec::new();
+    for row in &rows {
+        // Build RETURNING result before deletion
+        let mut ctx = EvalContext::new(&row.pk, &row.doc);
+        let mut row_json = serde_json::Map::new();
+        for item in returning {
+            match item {
+                SelectItem::AllColumns => {
+                    if let Ok(serde_json::Value::Object(map)) =
+                        serde_json::from_slice::<serde_json::Value>(&row.doc)
+                    {
+                        for (k, v) in map {
+                            row_json.insert(k, v);
+                        }
+                    }
+                }
+                SelectItem::Expr { expr, alias } => {
+                    let val = ctx.eval(expr)?;
+                    let col_name = alias.clone().unwrap_or_else(|| expr_display_name(expr));
+                    row_json.insert(col_name, sql_value_to_json(&val));
+                }
+            }
+        }
+        result_rows.push(serde_json::to_vec(&serde_json::Value::Object(row_json))?);
+
+        // Now delete
+        remove_secondary_indexes(db, session, table, &row.pk, &row.doc)?;
+        remove_vector_indexes(db, session, table, &row.pk)?;
+        let key = row_key(table, &row.pk);
+        write_put(db, session, key, Vec::new(), 0, u64::MAX, Some(1))?;
+    }
+
+    Ok(SqlResult::Rows(result_rows))
+}
+
+// ---------- INSERT ... ON CONFLICT (Upsert) ----------
+
+fn execute_upsert(
+    db: &Database,
+    session: &mut SqlSession,
+    table: &str,
+    columns: Vec<String>,
+    rows: Vec<Vec<Expr>>,
+    on_conflict: crate::sql::parser::OnConflictClause,
+) -> Result<SqlResult> {
+    validate_table_name(table)?;
+    let schema = load_table_schema(db, session, table)?;
+
+    let mut count = 0u64;
+    let mut last_commit_ts = None;
+    for values in &rows {
+        let mut json_obj = serde_json::Map::new();
+        let mut pk_val = None;
+
+        for (col_name, val_expr) in columns.iter().zip(values.iter()) {
+            let val = eval_const_expr(val_expr)?;
+            let json_val = sql_value_to_json(&val);
+            if col_name.eq_ignore_ascii_case(&schema.pk) {
+                pk_val = Some(match &val {
+                    SqlValue::Text(s) => s.clone(),
+                    SqlValue::Number(n) => n.to_string(),
+                    _ => return Err(sql_exec_err("primary key must be text or number")),
+                });
+            }
+            json_obj.insert(col_name.clone(), json_val);
+        }
+
+        let pk = pk_val.ok_or_else(|| {
+            sql_exec_err(format!(
+                "INSERT must include primary key column '{}'",
+                schema.pk
+            ))
+        })?;
+        validate_pk(&pk)?;
+
+        let key = row_key(table, &pk);
+        let existing = read_live_key(db, session, &key, None, None)?;
+
+        if let Some(existing_doc) = existing {
+            // Row exists
+            if on_conflict.do_nothing {
+                continue;
+            }
+            // DO UPDATE: merge assignments into existing doc
+            let mut doc_val: serde_json::Value = serde_json::from_slice(&existing_doc)
+                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+            if let serde_json::Value::Object(ref mut map) = doc_val {
+                for (col, val_expr) in &on_conflict.update_assignments {
+                    let val = eval_const_expr(val_expr)?;
+                    map.insert(col.clone(), sql_value_to_json(&val));
+                }
+            }
+            let new_doc = serde_json::to_vec(&doc_val)?;
+            remove_secondary_indexes(db, session, table, &pk, &existing_doc)?;
+            remove_vector_indexes(db, session, table, &pk)?;
+            let ts = write_put(db, session, key, new_doc.clone(), 0, u64::MAX, Some(1))?;
+            update_secondary_indexes(db, session, table, &pk, &new_doc)?;
+            update_vector_indexes(db, session, table, &pk, &new_doc)?;
+            last_commit_ts = ts.or(last_commit_ts);
+        } else {
+            // New row: normal insert
+            let doc = serde_json::to_vec(&serde_json::Value::Object(json_obj))?;
+            let ts = write_put(db, session, key, doc.clone(), 0, u64::MAX, Some(1))?;
+            update_fts_indexes(db, session, table, &pk, &doc)?;
+            update_ts_buckets(db, session, table, &doc)?;
+            update_secondary_indexes(db, session, table, &pk, &doc)?;
+            update_vector_indexes(db, session, table, &pk, &doc)?;
+            last_commit_ts = ts.or(last_commit_ts);
+        }
+        count += 1;
+    }
+
+    Ok(SqlResult::Affected {
+        rows: count,
+        commit_ts: last_commit_ts,
+        message: format!("upserted {count} row(s)"),
+    })
+}
+
+// ---------- Subquery Materialization ----------
+
+/// Recursively walk an expression tree and replace subquery expressions with
+/// their materialized results (literal values, InList, or BoolLit).
+fn materialize_subqueries(db: &Database, session: &mut SqlSession, expr: Expr) -> Result<Expr> {
+    match expr {
+        Expr::InSubquery {
+            expr: inner,
+            query,
+            negated,
+        } => {
+            // Execute the subquery and collect all values from the first column
+            let result = execute_stmt(db, session, *query)?;
+            let list = match result {
+                SqlResult::Rows(rows) => {
+                    let mut list = Vec::new();
+                    for row_bytes in &rows {
+                        if let Ok(serde_json::Value::Object(map)) =
+                            serde_json::from_slice::<serde_json::Value>(row_bytes)
+                        {
+                            if let Some((_key, val)) = map.into_iter().next() {
+                                list.push(json_val_to_expr(&val));
+                            }
+                        } else if let Ok(s) = std::str::from_utf8(row_bytes) {
+                            if let Ok(n) = s.parse::<f64>() {
+                                list.push(Expr::NumberLit(n));
+                            } else {
+                                list.push(Expr::StringLit(s.to_string()));
+                            }
+                        }
+                    }
+                    list
+                }
+                _ => Vec::new(),
+            };
+            let inner = materialize_subqueries(db, session, *inner)?;
+            Ok(Expr::InList {
+                expr: Box::new(inner),
+                list,
+                negated,
+            })
+        }
+        Expr::Exists { query, negated } => {
+            let result = execute_stmt(db, session, *query)?;
+            let has_rows = match result {
+                SqlResult::Rows(rows) => !rows.is_empty(),
+                _ => false,
+            };
+            Ok(Expr::BoolLit(if negated { !has_rows } else { has_rows }))
+        }
+        Expr::ScalarSubquery(query) => {
+            let result = execute_stmt(db, session, *query)?;
+            match result {
+                SqlResult::Rows(rows) => {
+                    if let Some(first) = rows.first() {
+                        if let Ok(serde_json::Value::Object(map)) =
+                            serde_json::from_slice::<serde_json::Value>(first)
+                        {
+                            if let Some((_key, val)) = map.into_iter().next() {
+                                return Ok(json_val_to_expr(&val));
+                            }
+                        }
+                        if let Ok(s) = std::str::from_utf8(first) {
+                            if let Ok(n) = s.parse::<f64>() {
+                                return Ok(Expr::NumberLit(n));
+                            }
+                            return Ok(Expr::StringLit(s.to_string()));
+                        }
+                    }
+                    Ok(Expr::Null)
+                }
+                _ => Ok(Expr::Null),
+            }
+        }
+        // Recurse into compound expressions
+        Expr::BinOp { left, op, right } => Ok(Expr::BinOp {
+            left: Box::new(materialize_subqueries(db, session, *left)?),
+            op,
+            right: Box::new(materialize_subqueries(db, session, *right)?),
+        }),
+        Expr::Not(inner) => Ok(Expr::Not(Box::new(materialize_subqueries(
+            db, session, *inner,
+        )?))),
+        Expr::IsNull {
+            expr: inner,
+            negated,
+        } => Ok(Expr::IsNull {
+            expr: Box::new(materialize_subqueries(db, session, *inner)?),
+            negated,
+        }),
+        other => Ok(other),
+    }
+}
+
+fn json_val_to_expr(val: &serde_json::Value) -> Expr {
+    match val {
+        serde_json::Value::Number(n) => Expr::NumberLit(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::String(s) => Expr::StringLit(s.clone()),
+        serde_json::Value::Bool(b) => Expr::BoolLit(*b),
+        serde_json::Value::Null => Expr::Null,
+        _ => Expr::StringLit(val.to_string()),
+    }
 }
 
 // ---------- CREATE TABLE AS SELECT ----------
@@ -7757,7 +8355,7 @@ fn execute_suggest_index(
             ..
         } => {
             let table = match from {
-                crate::sql::parser::TableRef::Named { name, .. } => name.clone(),
+                Some(crate::sql::parser::TableRef::Named { name, .. }) => name.clone(),
                 _ => {
                     return Ok(SqlResult::Rows(vec![]));
                 }

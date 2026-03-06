@@ -2,7 +2,7 @@
 name = "tensordb-cli"
 version = "0.2.0"
 edition = "2021"
-description = "Interactive CLI shell for TensorDB with TAB completion, output modes, and AI features"
+description = "Interactive CLI shell for TensorDB with TAB completion and output modes"
 license = "PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/tensor-db/tensorDB"
 

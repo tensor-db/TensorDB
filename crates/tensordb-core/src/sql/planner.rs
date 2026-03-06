@@ -476,6 +476,7 @@ fn plan_select(
             JoinType::Left => "LEFT",
             JoinType::Right => "RIGHT",
             JoinType::Cross => "CROSS",
+            JoinType::FullOuter => "FULL OUTER",
         };
 
         // Check for equi-join and index availability
@@ -618,7 +619,13 @@ pub fn generate_plan_with_stats(
             order_by,
             limit,
             ..
-        } => plan_select(from, items, joins, filter, group_by, order_by, limit, stats),
+        } => {
+            if let Some(from) = from {
+                plan_select(from, items, joins, filter, group_by, order_by, limit, stats)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -651,10 +658,10 @@ mod tests {
     fn plan_point_lookup() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named {
+            from: Some(TableRef::Named {
                 name: "users".to_string(),
                 alias: None,
-            },
+            }),
             items: vec![SelectItem::AllColumns],
             joins: vec![],
             filter: Some(Expr::BinOp {
@@ -670,6 +677,7 @@ mod tests {
             having: None,
             order_by: None,
             limit: None,
+            offset: None,
         };
 
         let plan = generate_plan(&stmt).unwrap();
@@ -683,10 +691,10 @@ mod tests {
     fn plan_full_scan_with_filter() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named {
+            from: Some(TableRef::Named {
                 name: "orders".to_string(),
                 alias: None,
-            },
+            }),
             items: vec![SelectItem::AllColumns],
             joins: vec![],
             filter: Some(Expr::BinOp {
@@ -702,6 +710,7 @@ mod tests {
             having: None,
             order_by: None,
             limit: None,
+            offset: None,
         };
 
         let plan = generate_plan(&stmt).unwrap();
@@ -714,10 +723,10 @@ mod tests {
     fn plan_with_order_by_and_limit() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named {
+            from: Some(TableRef::Named {
                 name: "events".to_string(),
                 alias: None,
-            },
+            }),
             items: vec![SelectItem::AllColumns],
             joins: vec![],
             filter: None,
@@ -729,6 +738,7 @@ mod tests {
             having: None,
             order_by: Some(vec![(Expr::Column("ts".to_string()), OrderDirection::Desc)]),
             limit: Some(10),
+            offset: None,
         };
 
         let plan = generate_plan(&stmt).unwrap();
@@ -741,10 +751,10 @@ mod tests {
     fn plan_aggregate_with_group_by() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named {
+            from: Some(TableRef::Named {
                 name: "sales".to_string(),
                 alias: None,
-            },
+            }),
             items: vec![
                 SelectItem::Expr {
                     expr: Expr::Column("region".to_string()),
@@ -769,6 +779,7 @@ mod tests {
             having: None,
             order_by: None,
             limit: None,
+            offset: None,
         };
 
         let plan = generate_plan(&stmt).unwrap();
@@ -780,10 +791,10 @@ mod tests {
     fn explain_plan_output() {
         let stmt = Statement::Select {
             ctes: vec![],
-            from: TableRef::Named {
+            from: Some(TableRef::Named {
                 name: "t".to_string(),
                 alias: None,
-            },
+            }),
             items: vec![SelectItem::AllColumns],
             joins: vec![],
             filter: None,
@@ -795,6 +806,7 @@ mod tests {
             having: None,
             order_by: None,
             limit: None,
+            offset: None,
         };
 
         let output = explain_plan(&stmt);

@@ -1,4 +1,5 @@
 pub mod access_stats;
+pub mod anomaly;
 pub mod cache_advisor;
 pub mod compaction_advisor;
 #[cfg(feature = "llm")]
@@ -20,6 +21,8 @@ pub mod speculation;
 pub mod sql_grammar;
 #[cfg(feature = "llm")]
 pub mod tokenizer;
+#[cfg(feature = "llm")]
+pub mod tool_calling;
 #[cfg(feature = "llm")]
 pub mod transformer;
 

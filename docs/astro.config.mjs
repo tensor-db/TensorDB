@@ -10,7 +10,7 @@ export default defineConfig({
     noSitemap,
     starlight({
       title: 'TensorDB',
-      description: 'Documentation for TensorDB — the AI-native bitemporal ledger database',
+      description: 'Documentation for TensorDB — the bitemporal ledger database',
       social: {
         github: 'https://github.com/tensor-db/TensorDB',
       },
@@ -87,18 +87,6 @@ export default defineConfig({
             { label: 'Fast Write', link: '/engine/fast-write/' },
             { label: 'Sharding', link: '/engine/sharding/' },
             { label: 'Write Batching', link: '/engine/write-batching/' },
-          ],
-        },
-        {
-          label: 'AI Runtime',
-          collapsed: true,
-          items: [
-            { label: 'Overview', link: '/ai/' },
-            { label: 'Insights', link: '/ai/insights/' },
-            { label: 'Risk Scoring', link: '/ai/risk-scoring/' },
-            { label: 'Query Advisor', link: '/ai/query-advisor/' },
-            { label: 'Compaction Advisor', link: '/ai/compaction-advisor/' },
-            { label: 'Cache Advisor', link: '/ai/cache-advisor/' },
           ],
         },
         {

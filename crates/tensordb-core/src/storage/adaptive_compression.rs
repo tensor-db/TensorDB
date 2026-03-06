@@ -32,6 +32,8 @@ pub enum CompressionCodec {
     Rle = 1,
     /// LZ4 block compression — fast general-purpose.
     Lz4 = 2,
+    /// Zstd compression — high ratio, good speed (feature-gated).
+    Zstd = 3,
 }
 
 impl CompressionCodec {
@@ -40,6 +42,7 @@ impl CompressionCodec {
             0 => Some(Self::None),
             1 => Some(Self::Rle),
             2 => Some(Self::Lz4),
+            3 => Some(Self::Zstd),
             _ => None,
         }
     }
@@ -49,6 +52,7 @@ impl CompressionCodec {
             Self::None => "none",
             Self::Rle => "rle",
             Self::Lz4 => "lz4",
+            Self::Zstd => "zstd",
         }
     }
 }
@@ -184,7 +188,7 @@ impl CodecSelector {
             match selected {
                 CompressionCodec::None => outcomes.none_selected += 1,
                 CompressionCodec::Rle => outcomes.rle_selected += 1,
-                CompressionCodec::Lz4 => outcomes.lz4_selected += 1,
+                CompressionCodec::Lz4 | CompressionCodec::Zstd => outcomes.lz4_selected += 1,
             }
         }
 
@@ -205,7 +209,7 @@ impl CodecSelector {
                     outcomes.rle_ratio_sum += ratio;
                     outcomes.rle_count += 1;
                 }
-                CompressionCodec::Lz4 => {
+                CompressionCodec::Lz4 | CompressionCodec::Zstd => {
                     outcomes.lz4_ratio_sum += ratio;
                     outcomes.lz4_count += 1;
                 }
@@ -422,6 +426,25 @@ pub fn compress_block(data: &[u8], codec: CompressionCodec) -> (u8, Vec<u8>) {
                 (2, compressed)
             }
         }
+        CompressionCodec::Zstd => {
+            #[cfg(feature = "compression-zstd")]
+            {
+                match zstd::encode_all(data, 3) {
+                    Ok(compressed) if compressed.len() < data.len() => (3, compressed),
+                    _ => (0, data.to_vec()),
+                }
+            }
+            #[cfg(not(feature = "compression-zstd"))]
+            {
+                // Fall back to LZ4 when zstd not available
+                let compressed = lz4_flex::compress_prepend_size(data);
+                if compressed.len() >= data.len() {
+                    (0, data.to_vec())
+                } else {
+                    (2, compressed)
+                }
+            }
+        }
     }
 }
 
@@ -431,6 +454,17 @@ pub fn decompress_block(data: &[u8], codec_byte: u8, original_size: usize) -> Op
         CompressionCodec::None => Some(data.to_vec()),
         CompressionCodec::Rle => rle_decompress(data, original_size),
         CompressionCodec::Lz4 => lz4_flex::decompress_size_prepended(data).ok(),
+        CompressionCodec::Zstd => {
+            #[cfg(feature = "compression-zstd")]
+            {
+                zstd::decode_all(data).ok()
+            }
+            #[cfg(not(feature = "compression-zstd"))]
+            {
+                let _ = original_size;
+                None
+            }
+        }
     }
 }
 

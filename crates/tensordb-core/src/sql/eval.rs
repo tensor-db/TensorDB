@@ -9,6 +9,10 @@ pub enum SqlValue {
     Number(f64),
     Text(String),
     Decimal(rust_decimal::Decimal),
+    /// Unix seconds timestamp.
+    Timestamp(i64),
+    /// Duration in seconds.
+    Interval(i64),
 }
 
 impl SqlValue {
@@ -19,6 +23,8 @@ impl SqlValue {
             SqlValue::Number(n) => *n != 0.0,
             SqlValue::Text(s) => !s.is_empty(),
             SqlValue::Decimal(d) => !d.is_zero(),
+            SqlValue::Timestamp(t) => *t != 0,
+            SqlValue::Interval(i) => *i != 0,
         }
     }
 
@@ -32,6 +38,8 @@ impl SqlValue {
                 use rust_decimal::prelude::ToPrimitive;
                 d.to_f64()
             }
+            SqlValue::Timestamp(t) => Some(*t as f64),
+            SqlValue::Interval(i) => Some(*i as f64),
         }
     }
 
@@ -46,6 +54,8 @@ impl SqlValue {
             } else {
                 rust_decimal::Decimal::ZERO
             }),
+            SqlValue::Timestamp(t) => rust_decimal::Decimal::from_str(&t.to_string()).ok(),
+            SqlValue::Interval(i) => rust_decimal::Decimal::from_str(&i.to_string()).ok(),
             SqlValue::Null => None,
         }
     }
@@ -57,6 +67,8 @@ impl SqlValue {
             SqlValue::Number(n) => n.to_string(),
             SqlValue::Text(s) => s.clone(),
             SqlValue::Decimal(d) => d.to_string(),
+            SqlValue::Timestamp(t) => t.to_string(),
+            SqlValue::Interval(i) => i.to_string(),
         }
     }
 
@@ -94,6 +106,10 @@ impl SqlValue {
                     None
                 }
             }
+            (SqlValue::Timestamp(a), SqlValue::Timestamp(b)) => Some(a.cmp(b)),
+            (SqlValue::Interval(a), SqlValue::Interval(b)) => Some(a.cmp(b)),
+            (SqlValue::Timestamp(a), SqlValue::Number(b)) => (*a as f64).partial_cmp(b),
+            (SqlValue::Number(a), SqlValue::Timestamp(b)) => a.partial_cmp(&(*b as f64)),
             _ => None,
         }
     }
@@ -334,35 +350,19 @@ impl<'a> EvalContext<'a> {
                         Some(n) => Ok(SqlValue::Number((n as i64) as f64)),
                         None => Ok(SqlValue::Null),
                     },
-                    "REAL" | "FLOAT" | "DOUBLE" => match &val {
-                        SqlValue::Number(n) => Ok(SqlValue::Number(*n)),
-                        SqlValue::Text(s) => match s.parse::<f64>() {
-                            Ok(n) => Ok(SqlValue::Number(n)),
-                            Err(_) => Ok(SqlValue::Null),
-                        },
-                        SqlValue::Bool(b) => Ok(SqlValue::Number(if *b { 1.0 } else { 0.0 })),
-                        SqlValue::Decimal(d) => {
-                            use rust_decimal::prelude::ToPrimitive;
-                            Ok(SqlValue::Number(d.to_f64().unwrap_or(0.0)))
-                        }
-                        SqlValue::Null => Ok(SqlValue::Null),
+                    "REAL" | "FLOAT" | "DOUBLE" => match val.to_f64() {
+                        Some(n) => Ok(SqlValue::Number(n)),
+                        None => Ok(SqlValue::Null),
                     },
-                    "TEXT" | "VARCHAR" | "STRING" => match &val {
-                        SqlValue::Null => Ok(SqlValue::Null),
-                        SqlValue::Text(s) => Ok(SqlValue::Text(s.clone())),
-                        SqlValue::Number(n) => Ok(SqlValue::Text(format_number(*n))),
-                        SqlValue::Bool(b) => Ok(SqlValue::Text(b.to_string())),
-                        SqlValue::Decimal(d) => Ok(SqlValue::Text(d.to_string())),
+                    "TEXT" | "VARCHAR" | "STRING" => Ok(SqlValue::Text(val.to_sort_string())),
+                    "BOOLEAN" | "BOOL" => Ok(SqlValue::Bool(val.is_truthy())),
+                    "TIMESTAMP" | "DATETIME" => match val.to_f64() {
+                        Some(n) => Ok(SqlValue::Timestamp(n as i64)),
+                        None => Ok(SqlValue::Null),
                     },
-                    "BOOLEAN" | "BOOL" => match &val {
-                        SqlValue::Bool(b) => Ok(SqlValue::Bool(*b)),
-                        SqlValue::Number(n) => Ok(SqlValue::Bool(*n != 0.0)),
-                        SqlValue::Text(s) => {
-                            let lower = s.to_lowercase();
-                            Ok(SqlValue::Bool(lower == "true" || lower == "1"))
-                        }
-                        SqlValue::Null => Ok(SqlValue::Null),
-                        SqlValue::Decimal(d) => Ok(SqlValue::Bool(!d.is_zero())),
+                    "INTERVAL" => match val.to_f64() {
+                        Some(n) => Ok(SqlValue::Interval(n as i64)),
+                        None => Ok(SqlValue::Null),
                     },
                     "DECIMAL" | "NUMERIC" => match val.to_decimal() {
                         Some(d) => Ok(SqlValue::Decimal(d)),
@@ -373,6 +373,15 @@ impl<'a> EvalContext<'a> {
                     ))),
                 }
             }
+            Expr::InSubquery { .. } => Err(sql_exec_err(
+                "subquery in expression must be materialized before evaluation",
+            )),
+            Expr::Exists { .. } => Err(sql_exec_err(
+                "EXISTS subquery must be materialized before evaluation",
+            )),
+            Expr::ScalarSubquery(_) => Err(sql_exec_err(
+                "scalar subquery must be materialized before evaluation",
+            )),
         }
     }
 }
@@ -421,6 +430,16 @@ fn eval_binop(lv: &SqlValue, op: &BinOperator, rv: &SqlValue) -> Result<SqlValue
             Ok(SqlValue::Bool(like_match(&ltext, &rtext)))
         }
         BinOperator::Add => {
+            // Timestamp + Interval = Timestamp
+            if let (SqlValue::Timestamp(t), SqlValue::Interval(i))
+            | (SqlValue::Interval(i), SqlValue::Timestamp(t)) = (lv, rv)
+            {
+                return Ok(SqlValue::Timestamp(t + i));
+            }
+            // Interval + Interval = Interval
+            if let (SqlValue::Interval(a), SqlValue::Interval(b)) = (lv, rv) {
+                return Ok(SqlValue::Interval(a + b));
+            }
             // Use Decimal arithmetic when either operand is Decimal
             if matches!(lv, SqlValue::Decimal(_)) || matches!(rv, SqlValue::Decimal(_)) {
                 match (lv.to_decimal(), rv.to_decimal()) {
@@ -435,6 +454,18 @@ fn eval_binop(lv: &SqlValue, op: &BinOperator, rv: &SqlValue) -> Result<SqlValue
             }
         }
         BinOperator::Sub => {
+            // Timestamp - Interval = Timestamp
+            if let (SqlValue::Timestamp(t), SqlValue::Interval(i)) = (lv, rv) {
+                return Ok(SqlValue::Timestamp(t - i));
+            }
+            // Timestamp - Timestamp = Interval
+            if let (SqlValue::Timestamp(a), SqlValue::Timestamp(b)) = (lv, rv) {
+                return Ok(SqlValue::Interval(a - b));
+            }
+            // Interval - Interval = Interval
+            if let (SqlValue::Interval(a), SqlValue::Interval(b)) = (lv, rv) {
+                return Ok(SqlValue::Interval(a - b));
+            }
             if matches!(lv, SqlValue::Decimal(_)) || matches!(rv, SqlValue::Decimal(_)) {
                 match (lv.to_decimal(), rv.to_decimal()) {
                     (Some(a), Some(b)) => Ok(SqlValue::Decimal(a - b)),
@@ -507,6 +538,71 @@ fn eval_binop(lv: &SqlValue, op: &BinOperator, rv: &SqlValue) -> Result<SqlValue
                 _ => Ok(SqlValue::Null),
             }
         }
+        BinOperator::JsonArrow => {
+            // col -> 'key' returns JSON value
+            let json_str = lv.to_sort_string();
+            let key = rv.to_sort_string();
+            let parsed: std::result::Result<serde_json::Value, _> = serde_json::from_str(&json_str);
+            match parsed {
+                Ok(serde_json::Value::Object(map)) => match map.get(&key) {
+                    Some(v) => Ok(SqlValue::Text(v.to_string())),
+                    None => Ok(SqlValue::Null),
+                },
+                Ok(serde_json::Value::Array(arr)) => {
+                    if let Ok(idx) = key.parse::<usize>() {
+                        match arr.get(idx) {
+                            Some(v) => Ok(SqlValue::Text(v.to_string())),
+                            None => Ok(SqlValue::Null),
+                        }
+                    } else {
+                        Ok(SqlValue::Null)
+                    }
+                }
+                _ => Ok(SqlValue::Null),
+            }
+        }
+        BinOperator::JsonArrowText => {
+            // col ->> 'key' returns text extraction
+            let json_str = lv.to_sort_string();
+            let key = rv.to_sort_string();
+            let parsed: std::result::Result<serde_json::Value, _> = serde_json::from_str(&json_str);
+            match parsed {
+                Ok(serde_json::Value::Object(map)) => match map.get(&key) {
+                    Some(serde_json::Value::String(s)) => Ok(SqlValue::Text(s.clone())),
+                    Some(serde_json::Value::Null) => Ok(SqlValue::Null),
+                    Some(v) => Ok(SqlValue::Text(v.to_string())),
+                    None => Ok(SqlValue::Null),
+                },
+                Ok(serde_json::Value::Array(arr)) => {
+                    if let Ok(idx) = key.parse::<usize>() {
+                        match arr.get(idx) {
+                            Some(serde_json::Value::String(s)) => Ok(SqlValue::Text(s.clone())),
+                            Some(serde_json::Value::Null) => Ok(SqlValue::Null),
+                            Some(v) => Ok(SqlValue::Text(v.to_string())),
+                            None => Ok(SqlValue::Null),
+                        }
+                    } else {
+                        Ok(SqlValue::Null)
+                    }
+                }
+                _ => Ok(SqlValue::Null),
+            }
+        }
+        BinOperator::JsonContains => {
+            // col @> '{"key": "value"}' — containment check
+            let left_str = lv.to_sort_string();
+            let right_str = rv.to_sort_string();
+            let left_parsed: std::result::Result<serde_json::Value, _> =
+                serde_json::from_str(&left_str);
+            let right_parsed: std::result::Result<serde_json::Value, _> =
+                serde_json::from_str(&right_str);
+            match (left_parsed, right_parsed) {
+                (Ok(left_json), Ok(right_json)) => {
+                    Ok(SqlValue::Bool(json_contains(&left_json, &right_json)))
+                }
+                _ => Ok(SqlValue::Bool(false)),
+            }
+        }
         BinOperator::And | BinOperator::Or => {
             unreachable!("AND/OR handled with short-circuit in eval")
         }
@@ -574,6 +670,8 @@ fn eval_scalar_function(name: &str, args: &[Expr], ctx: &mut EvalContext) -> Res
                     SqlValue::Number(_) => "number",
                     SqlValue::Text(_) => "text",
                     SqlValue::Decimal(_) => "decimal",
+                    SqlValue::Timestamp(_) => "timestamp",
+                    SqlValue::Interval(_) => "interval",
                 };
                 Ok(SqlValue::Text(t.to_string()))
             } else {
@@ -1171,7 +1269,7 @@ fn eval_scalar_function(name: &str, args: &[Expr], ctx: &mut EvalContext) -> Res
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            Ok(SqlValue::Number(ts as f64))
+            Ok(SqlValue::Timestamp(ts as i64))
         }
         "EXTRACT" => {
             // EXTRACT('field', timestamp) — simplified epoch-based extraction
@@ -1224,6 +1322,74 @@ fn eval_scalar_function(name: &str, args: &[Expr], ctx: &mut EvalContext) -> Res
                 Ok(SqlValue::Null)
             }
         }
+        "DATE_ADD" => {
+            // DATE_ADD(timestamp, interval_seconds)
+            if args.len() >= 2 {
+                let ts = match ctx.eval(&args[0])? {
+                    SqlValue::Timestamp(t) => t,
+                    other => match other.to_f64() {
+                        Some(n) => n as i64,
+                        None => return Ok(SqlValue::Null),
+                    },
+                };
+                let interval = match ctx.eval(&args[1])? {
+                    SqlValue::Interval(i) => i,
+                    other => match other.to_f64() {
+                        Some(n) => n as i64,
+                        None => return Ok(SqlValue::Null),
+                    },
+                };
+                Ok(SqlValue::Timestamp(ts + interval))
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "DATE_SUB" => {
+            // DATE_SUB(timestamp, interval_seconds)
+            if args.len() >= 2 {
+                let ts = match ctx.eval(&args[0])? {
+                    SqlValue::Timestamp(t) => t,
+                    other => match other.to_f64() {
+                        Some(n) => n as i64,
+                        None => return Ok(SqlValue::Null),
+                    },
+                };
+                let interval = match ctx.eval(&args[1])? {
+                    SqlValue::Interval(i) => i,
+                    other => match other.to_f64() {
+                        Some(n) => n as i64,
+                        None => return Ok(SqlValue::Null),
+                    },
+                };
+                Ok(SqlValue::Timestamp(ts - interval))
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "MAKE_TIMESTAMP" => {
+            // MAKE_TIMESTAMP(epoch_seconds) -> Timestamp
+            if let Some(arg) = args.first() {
+                let val = ctx.eval(arg)?;
+                match val.to_f64() {
+                    Some(n) => Ok(SqlValue::Timestamp(n as i64)),
+                    None => Ok(SqlValue::Null),
+                }
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "MAKE_INTERVAL" => {
+            // MAKE_INTERVAL(seconds) -> Interval
+            if let Some(arg) = args.first() {
+                let val = ctx.eval(arg)?;
+                match val.to_f64() {
+                    Some(n) => Ok(SqlValue::Interval(n as i64)),
+                    None => Ok(SqlValue::Null),
+                }
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
         "TO_CHAR" => {
             // Simplified TO_CHAR: just formats number or timestamp as string
             if let Some(arg) = args.first() {
@@ -1232,6 +1398,65 @@ fn eval_scalar_function(name: &str, args: &[Expr], ctx: &mut EvalContext) -> Res
                     SqlValue::Null => Ok(SqlValue::Null),
                     SqlValue::Number(n) => Ok(SqlValue::Text(format_number(n))),
                     other => Ok(SqlValue::Text(other.to_sort_string())),
+                }
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "JSON_EXTRACT" | "JSON_EXTRACT_PATH" => {
+            // JSON_EXTRACT(json_text, path)
+            if args.len() >= 2 {
+                let json_str = match ctx.eval(&args[0])? {
+                    SqlValue::Text(s) => s,
+                    _ => return Ok(SqlValue::Null),
+                };
+                let path = match ctx.eval(&args[1])? {
+                    SqlValue::Text(s) => s,
+                    _ => return Ok(SqlValue::Null),
+                };
+                let parsed: std::result::Result<serde_json::Value, _> =
+                    serde_json::from_str(&json_str);
+                match parsed {
+                    Ok(serde_json::Value::Object(map)) => match map.get(&path) {
+                        Some(v) => Ok(SqlValue::Text(v.to_string())),
+                        None => Ok(SqlValue::Null),
+                    },
+                    _ => Ok(SqlValue::Null),
+                }
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "JSON_TYPE" => {
+            // JSON_TYPE(json_text) -> type name string
+            if let Some(arg) = args.first() {
+                let val = ctx.eval(arg)?;
+                let json_str = val.to_sort_string();
+                let parsed: std::result::Result<serde_json::Value, _> =
+                    serde_json::from_str(&json_str);
+                match parsed {
+                    Ok(serde_json::Value::Object(_)) => Ok(SqlValue::Text("object".to_string())),
+                    Ok(serde_json::Value::Array(_)) => Ok(SqlValue::Text("array".to_string())),
+                    Ok(serde_json::Value::String(_)) => Ok(SqlValue::Text("string".to_string())),
+                    Ok(serde_json::Value::Number(_)) => Ok(SqlValue::Text("number".to_string())),
+                    Ok(serde_json::Value::Bool(_)) => Ok(SqlValue::Text("boolean".to_string())),
+                    Ok(serde_json::Value::Null) => Ok(SqlValue::Text("null".to_string())),
+                    Err(_) => Ok(SqlValue::Null),
+                }
+            } else {
+                Ok(SqlValue::Null)
+            }
+        }
+        "JSON_ARRAY_LENGTH" => {
+            // JSON_ARRAY_LENGTH(json_text) -> number
+            if let Some(arg) = args.first() {
+                let val = ctx.eval(arg)?;
+                let json_str = val.to_sort_string();
+                let parsed: std::result::Result<serde_json::Value, _> =
+                    serde_json::from_str(&json_str);
+                match parsed {
+                    Ok(serde_json::Value::Array(arr)) => Ok(SqlValue::Number(arr.len() as f64)),
+                    _ => Ok(SqlValue::Null),
                 }
             } else {
                 Ok(SqlValue::Null)
@@ -1619,6 +1844,19 @@ fn json_to_sql_value(v: Option<&serde_json::Value>) -> SqlValue {
     }
 }
 
+/// Check if `left` JSON value contains `right` JSON value.
+fn json_contains(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    match (left, right) {
+        (serde_json::Value::Object(lm), serde_json::Value::Object(rm)) => rm
+            .iter()
+            .all(|(k, rv)| lm.get(k).is_some_and(|lv| json_contains(lv, rv))),
+        (serde_json::Value::Array(la), serde_json::Value::Array(ra)) => ra
+            .iter()
+            .all(|rv| la.iter().any(|lv| json_contains(lv, rv))),
+        _ => left == right,
+    }
+}
+
 fn format_number(n: f64) -> String {
     if n == (n as i64) as f64 {
         format!("{}", n as i64)
@@ -1636,6 +1874,8 @@ pub fn sql_value_to_json(v: &SqlValue) -> serde_json::Value {
             .unwrap_or(serde_json::Value::Null),
         SqlValue::Text(s) => serde_json::Value::String(s.clone()),
         SqlValue::Decimal(d) => serde_json::Value::String(d.to_string()),
+        SqlValue::Timestamp(t) => serde_json::Number::from(*t).into(),
+        SqlValue::Interval(i) => serde_json::Number::from(*i).into(),
     }
 }
 

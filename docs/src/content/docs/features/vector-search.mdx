@@ -2,10 +2,10 @@
 draft: false
 head: []
 title: Vector Search
-description: Native vector similarity search in TensorDB for AI/ML and RAG applications.
+description: Native vector similarity search in TensorDB for semantic search and RAG applications.
 ---
 
-TensorDB includes native vector similarity search, enabling AI/ML applications to store and query embeddings directly in the database.
+TensorDB includes native vector similarity search, enabling applications to store and query embeddings directly in the database.
 
 ## Storing Vectors
 
@@ -74,13 +74,12 @@ let context = db.sql(
     &[Value::Vector(query_embedding)]
 )?;
 
-// 3. Pass context to LLM
-let answer = llm.generate(&format!("Context: {:?}\nQuestion: How does bitemporal work?", context))?;
+// 3. Use results in your application
 ```
 
 ## Use Cases
 
 - **Semantic search**: Find documents by meaning, not keywords
-- **RAG (Retrieval-Augmented Generation)**: Store and retrieve context for LLMs
+- **Retrieval-Augmented Generation**: Store and retrieve context for language models
 - **Recommendation systems**: Find similar items based on embeddings
 - **Anomaly detection**: Detect outlier vectors in streaming data

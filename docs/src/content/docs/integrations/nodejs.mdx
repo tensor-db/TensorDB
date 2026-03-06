@@ -69,8 +69,6 @@ for (const [key, value] of entries) {
 const config = new Config();
 config.shardCount = 8;
 config.memtableMaxBytes = 8 * 1024 * 1024;
-config.aiAutoInsights = true;
-
 const db = Database.open('my_data', config);
 ```
 

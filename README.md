@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>An AI-native, bitemporal ledger database with MVCC, full SQL, real transactions, PITR, vector search, and sub-microsecond performance.</strong>
+  <strong>A bitemporal ledger database with MVCC, full SQL, real transactions, PITR, vector search, and sub-microsecond performance.</strong>
 </p>
 
 <p align="center">
@@ -43,22 +43,12 @@ Full 4-way Criterion benchmark (optimized release build):
 - **3.6 µs** point writes via `FastWritePath` with group-commit WAL
 - **3.8M reads/sec** sustained throughput at 1k dataset size
 
-**Inference engine** (NL-to-SQL via embedded Qwen3-0.6B):
-
-| Metric | Baseline | Optimized | Speedup |
-|--------|----------|-----------|---------|
-| Per-token LM head | 54.9 ms | 1.8 ms | **30.3x** |
-| End-to-end per token | 56.5 ms | 1.8 ms | **30.9x** |
-
-Purpose-built optimizations (vocab pruning, SIMD matvec, grammar fusion) exploit the fact that only ~5K of 151K tokens are valid SQL. See [inference benchmarks](#ai-runtime--embedded-inference-engine) for details.
-
 Benchmarks use Criterion 0.5. Run them yourself:
 
 ```bash
 cargo bench --bench comparative    # TensorDB vs SQLite
 cargo bench --bench multi_engine   # TensorDB vs SQLite vs sled vs redb
 cargo bench --bench basic          # Microbenchmarks
-cargo bench --bench inference      # Inference engine optimizations
 ```
 
 ## Install
@@ -150,7 +140,6 @@ BACKUP TO '/tmp/backup.json' SINCE EPOCH 3;
 # Run built-in examples
 cargo run --example quickstart     # Core features: SQL, time-travel, prepared statements
 cargo run --example bitemporal     # Bitemporal ledger: AS OF + VALID AT queries
-cargo run --example ai_native      # AI runtime: insights, risk scoring, query planning
 ```
 
 ## Key Features
@@ -200,69 +189,6 @@ cargo run --example ai_native      # AI runtime: insights, risk scoring, query p
 - **`VERIFY BACKUP`** — Validate backup integrity without restoring.
 - **`VACUUM`** — Tombstone cleanup with compaction scheduling via `SET COMPACTION_WINDOW`.
 
-### AI Runtime & Embedded Inference Engine
-- **Pure-Rust LLM Inference** — Custom inference engine (~3.3K LoC) running Qwen3-0.6B entirely in-process. No C++ toolchain, no llama.cpp, no external model servers. Implements the full stack: GGUF v3 parser, BPE tokenizer, Qwen2 transformer with GQA + RoPE + SwiGLU, KV cache, and token sampling — all in safe Rust.
-- **`ASK` — Natural Language to SQL** — `ASK 'show me the top 10 customers by revenue'` translates to SQL and executes in one step. The database uses its own schema metadata to prompt the model, so it always knows your tables and columns.
-- **SQL Grammar-Constrained Decoding** — Unlike general-purpose inference engines, TensorDB biases token generation toward valid SQL at every decoding step. The grammar decoder penalizes non-SQL tokens, reducing invalid outputs without requiring retries.
-- **Purpose-Built Inference Optimizations** — Six optimizations exploit the fact that this engine only generates SQL, not general text:
-  - **Vocabulary-pruned LM head** — Only ~5K SQL-compatible tokens are scored instead of the full 151K vocab (**22x** faster per token)
-  - **Vec\<bool\> grammar mask** — O(1) array indexing replaces per-token HashSet lookups (**20x** faster than HashSet)
-  - **SIMD matvec** — AVX2/NEON-accelerated quantized matrix-vector multiply (**2.7x** on NEON, up to 4x on AVX2)
-  - **Rayon-parallelized matvec** — All matrix-vector multiplies distribute rows across cores (**5.3x** on multi-core)
-  - **RoPE frequency precomputation** — Table lookup replaces per-head `powf()` calls (**3.3x** faster)
-  - **Scratch buffer reuse** — Zero per-token heap allocations (all buffers pre-allocated)
-- **Table-Filtered Schema Context** — Schema context is automatically pruned to only the tables relevant to each question, keeping prompts short for optimal 0.6B model performance.
-- **Schema Cache with DDL Invalidation** — Schema context is cached with a configurable TTL and automatically invalidated on `CREATE TABLE`, `DROP TABLE`, or `ALTER TABLE`.
-- **Background Insight Synthesis** — In-process AI pipeline consuming change feeds.
-- **Inline Risk Scoring** — Per-write risk assessment without external model servers.
-- **AI Advisors** — Compaction scheduling, cache tuning, query optimization recommendations.
-- **ML Pipeline** — Feature store, model registry, point-in-time joins, inference metrics.
-- **`EXPLAIN AI`** — SQL command for AI insights, provenance, and risk scores per key.
-
-<details>
-<summary><strong>Why build a custom inference engine instead of using llama.cpp?</strong></summary>
-
-Most databases that embed AI wrap an existing C/C++ inference library (PostgresML wraps libtorch, SQLite-AI wraps llama.cpp). TensorDB takes a different approach: a purpose-built pure-Rust inference engine that trades generality for deep integration.
-
-| | TensorDB Native Engine | llama.cpp |
-|---|---|---|
-| **Code** | ~3.3K lines pure Rust | ~100K+ lines C/C++ |
-| **Build** | `cargo build` (no C++ toolchain) | Requires clang/gcc, bindgen, platform headers |
-| **Scope** | Qwen2/3 for SQL generation | Any architecture, any task |
-| **GPU** | CPU only | CUDA, Metal, Vulkan, 10+ backends |
-| **Quantization** | Q8_0, Q4_0, F16, F32 | 30+ formats including sub-2-bit |
-| **Grammar** | SQL-specific soft constraints | GBNF formal grammar (any grammar) |
-| **SQL-mode perf** | **15x faster per-token** via vocab pruning + rayon parallelism (347 µs/tok vs 5.1 ms/tok baseline) | Full-vocab LM head on every token regardless of task |
-| **Schema integration** | Direct access to database metadata, table-filtered schema context | External process, no schema awareness |
-| **Cross-compilation** | Pure Rust — compiles anywhere Rust does | Platform-specific C++ toolchain per target |
-
-The trade-off is intentional: TensorDB's engine is not a general-purpose inference runtime. It runs one model family on CPU for one task (NL-to-SQL). In exchange, it compiles with `cargo build`, cross-compiles trivially, has zero unsafe C++ dependencies, and integrates directly with the database's schema metadata and query engine. Because the engine knows it's generating SQL — not prose — it prunes the vocabulary from 151K tokens to ~5K, skipping 97% of the most expensive per-token computation. A general-purpose engine can't make that trade.
-
-</details>
-
-<details>
-<summary><strong>Inference performance benchmarks (Criterion 0.5, Qwen3-0.6B Q8_0 dimensions)</strong></summary>
-
-| Optimization | Before | After | Speedup |
-|---|---|---|---|
-| **LM head (per token)** | 54.9 ms (full 151K vocab) | 2.5 ms (active 5K vocab) | **22x** |
-| **Grammar apply (per token)** | 1.04 ms (HashSet 151K lookups) | 50.8 µs (Vec\<bool\> mask) | **20.5x** |
-| **RoPE (per token)** | 4.3 µs (inline `powf`) | 1.3 µs (precomputed freqs) | **3.3x** |
-| **Q8_0 matvec 1024x1024** | 365 µs (scalar) | 68.7 µs (NEON + rayon) | **5.3x** |
-| **Scratch buffers (per token)** | 3.0 µs (10 allocs) | 2.7 µs (zero allocs) | 1.14x |
-| **End-to-end per token** | 5.1 ms (full matvec + HashSet) | **347 µs** (active vocab + scatter) | **14.7x** |
-
-The dominant cost is the LM head matmul — a [151K × 1024] matrix-vector multiply that runs on every generated token. By recognizing that only ~5K tokens can appear in valid SQL, TensorDB computes only those 5K dot products and fills the rest with −∞. Combined with rayon parallelism across matrix rows, this yields a ~15x end-to-end per-token speedup.
-
-Run the benchmarks yourself:
-
-```bash
-cargo bench --bench inference                 # All optimizations
-cargo bench --bench inference --features simd # With SIMD-accelerated matvec
-```
-
-</details>
-
 ### Language Bindings & Integrations
 - **Rust** — Native embedded library (`tensordb-core`).
 - **Python** — PyO3 bindings (`tensordb-python`) — `open()`, `put()`, `get()`, `sql()`.
@@ -270,7 +196,7 @@ cargo bench --bench inference --features simd # With SIMD-accelerated matvec
 - **Interactive CLI** — TAB completion, persistent history, table/line/JSON output modes.
 - **Optional C++ Acceleration** — `--features native` via `cxx` for Hasher, Compressor, BloomProbe.
 - **Optional io_uring** — `--features io-uring` for Linux async I/O.
-- **Optional SIMD** — `--features simd` for hardware-accelerated bloom probes, checksums, and LLM inference matvec (AVX2/NEON).
+- **Optional SIMD** — `--features simd` for hardware-accelerated bloom probes and checksums (AVX2/NEON).
 
 ## Use Cases
 
@@ -292,7 +218,7 @@ Every write is preserved. Roll back to any previous state with a single query. B
 <tr>
 <td width="50%" valign="top">
 
-### AI-Powered Applications
+### Multi-Model Applications
 Store vectors alongside your regular data. Run semantic search, full-text search, and SQL queries in one database. No need to sync between a vector store, a search engine, and a relational DB.
 
 </td>
@@ -358,13 +284,6 @@ graph TB
 
     CF[Change Feeds<br/>durable cursors · consumer groups]
 
-    subgraph AI Runtime
-        INS[Insight Synthesis<br/>background batching]
-        RISK[Risk Scoring<br/>inline assessment]
-        ADV[Advisors<br/>compaction · cache · query]
-        ML[ML Pipeline<br/>feature store · model registry]
-    end
-
     subgraph Storage Engine
         WAL[Write-Ahead Log<br/>CRC-framed · group commit · fdatasync]
         MT[Memtable<br/>sorted in-memory map]
@@ -395,10 +314,6 @@ graph TB
     S0 --> CF
     S1 --> CF
     SN --> CF
-    S0 --> INS
-    INS --> RISK
-    INS --> ADV
-    INS --> ML
     S0 --> WAL
     S1 --> WAL
     SN --> WAL
@@ -507,7 +422,7 @@ graph TB
 TensorDB is configured through the `Config` struct. All parameters have sensible defaults.
 
 <details>
-<summary><strong>All 33 Configuration Parameters</strong></summary>
+<summary><strong>All Configuration Parameters</strong></summary>
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -525,17 +440,6 @@ TensorDB is configured through the `Config` struct. All parameters have sensible
 | `compaction_max_levels` | `usize` | `7` | Maximum compaction levels (L0–L6) |
 | `fast_write_enabled` | `bool` | `true` | Enable lock-free fast write path |
 | `fast_write_wal_batch_interval_us` | `u64` | `1000` | WAL group commit batch interval (µs) |
-| `ai_auto_insights` | `bool` | `false` | Enable background AI insight synthesis |
-| `ai_batch_window_ms` | `u64` | `20` | AI batch accumulation window |
-| `ai_batch_max_events` | `usize` | `16` | Max events per AI batch |
-| `ai_inline_risk_assessment` | `bool` | `false` | Inline risk score on writes |
-| `ai_annotate_reads` | `bool` | `false` | Annotate reads with AI metadata |
-| `ai_compaction_advisor` | `bool` | `false` | AI-driven compaction scheduling |
-| `ai_cache_advisor` | `bool` | `false` | AI-driven cache admission/eviction |
-| `ai_access_stats_size` | `usize` | `1024` | Hot-key tracker ring buffer size |
-| `llm_context_size` | `usize` | `2048` | LLM inference context window size |
-| `llm_schema_cache_ttl_secs` | `u64` | `60` | Schema cache TTL for NL-to-SQL (seconds) |
-| `llm_grammar_constrained` | `bool` | `true` | Enable SQL grammar-constrained decoding |
 | `slow_query_threshold_us` | `u64` | `10_000` | Slow query log threshold (µs) |
 | `strict_mode` | `bool` | `false` | Fail on silent type coercion |
 | `compaction_window_start_hour` | `Option<u8>` | `None` | Compaction window start (0–23) |
@@ -554,7 +458,7 @@ tensordb/
 ├── crates/
 │   ├── tensordb-core/           # Database engine (main crate, ~31k lines)
 │   │   └── src/
-│   │       ├── ai/              # AI runtime, native LLM inference (GGUF, BPE, transformer), ML pipeline, advisors
+│   │       ├── ai/              # Anomaly detection, learned cost model
 │   │       ├── engine/          # Database, shard, fast write path, change feeds
 │   │       ├── storage/         # SSTable, WAL, compaction, levels, cache, columnar, group WAL
 │   │       ├── sql/             # Parser, executor, evaluator, planner, vectorized engine
@@ -572,10 +476,10 @@ tensordb/
 │   ├── tensordb-python/         # Python bindings (PyO3 / maturin)
 │   └── tensordb-node/           # Node.js bindings (napi-rs)
 ├── tests/                       # 800+ tests across 51 suites
-├── benches/                     # Criterion benchmarks (basic, comparative, multi-engine, inference)
-├── examples/                    # quickstart.rs, bitemporal.rs, ai_native.rs, fastapi, express
+├── benches/                     # Criterion benchmarks (basic, comparative, multi-engine)
+├── examples/                    # quickstart.rs, bitemporal.rs, fastapi, express
 ├── docs/                        # Interactive documentation site (Starlight/Astro)
-├── scripts/                     # Benchmark matrix, AI overhead gate, overnight burn-in
+├── scripts/                     # Benchmark matrix, overnight burn-in
 ├── Dockerfile                   # Multi-stage Docker image for tensordb-server
 ├── docker-compose.yml           # Docker Compose example with volume and healthcheck
 └── .github/workflows/           # CI, crates.io publish, Docker image publish
@@ -591,7 +495,7 @@ cargo test --workspace --all-targets
 # With C++ acceleration
 cargo test --workspace --all-targets --features native
 
-# With SIMD-accelerated bloom probes, checksums, and inference matvec
+# With SIMD-accelerated bloom probes and checksums
 cargo test --features simd
 
 # With io_uring async I/O (Linux only)
@@ -608,11 +512,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo bench --bench comparative
 cargo bench --bench multi_engine
 cargo bench --bench basic
-cargo bench --bench inference                 # Inference engine optimizations
-cargo bench --bench inference --features simd # With SIMD-accelerated matvec
-
-# AI overhead regression gate
-./scripts/ai_overhead_gate.sh
 
 # Build Python bindings
 cd crates/tensordb-python && maturin develop
@@ -646,7 +545,7 @@ cd docs && npm install && npm run dev
 
 **On every push and PR to `main`:**
 
-1. **test-rust** — `cargo fmt --check` → `cargo clippy -D warnings` → `cargo test --workspace` → AI overhead gate script
+1. **test-rust** — `cargo fmt --check` → `cargo clippy -D warnings` → `cargo test --workspace`
 2. **test-native** — C++ toolchain → `cargo clippy --features native` → `cargo test --features native`
 
 **On release:**
@@ -656,95 +555,33 @@ cd docs && npm install && npm run dev
 
 ## Roadmap
 
-> **Strategy**: Fix foundations → Make it fast → Own the niche (bitemporal + AI + embedded) → Speak Postgres → Delight users → Then scale.
+> **Strategy**: Close SQL gaps → Speak Postgres fluently → Make it fast → Harden for enterprise → Scale out → Own the niche.
 
-### Done
+Informed by a comprehensive [enterprise evaluation](ENTERPRISE_ASSESSMENT.md) testing TensorDB against Oracle, PostgreSQL, Redis, and SQLite.
+
+### Shipped
 
 - **v0.1–v0.10** — Core engine, SQL, storage, query planner, prepared statements
 - **v0.11–v0.18** — Temporal SQL:2011, FTS, time-series, pgwire, data interchange, vectorized execution
 - **v0.19–v0.26** — Columnar storage, CDC, event sourcing, auth/RBAC, connection pooling, monitoring, schema evolution
-- **v0.27–v0.28** — Replication foundations, fast write engine
+- **v0.27–v0.28** — Replication foundations, fast write engine, secondary indexes, DECIMAL type
 - **v0.29** — EOAC transactions, PITR, incremental backup, encryption at rest
-- **v0.2.0** — Embedded LLM (Qwen3 0.6B via pure-Rust native inference engine) with purpose-built SQL-mode optimizations (30x per-token speedup via vocab pruning, SIMD matvec, grammar fusion)
-- **v0.30** — Advanced vector search (VECTOR(n), HNSW/IVF-PQ, hybrid search, temporal vectors), horizontal scaling (tensordb-distributed crate), ecosystem (Docker, CI publish workflows, example apps)
-- **v0.31** — Observability (SHOW STATS/SLOW QUERIES/ACTIVE QUERIES/STORAGE/COMPACTION STATUS, /health endpoint, cache hit tracking)
-- **v0.32** — Structured error codes (T1xxx–T6xxx), "Did you mean?" suggestions, SUGGEST INDEX, VERIFY BACKUP, VACUUM, audit log, row-level security, GDPR erasure, per-query resource limits, online DDL (DROP/RENAME COLUMN), plan guides, compaction scheduling, WAL management
+- **v0.30** — Vector search (HNSW/IVF-PQ, temporal vectors, hybrid search), horizontal scaling, Python/Node.js
+- **v0.31** — Observability (8 SHOW commands, /health endpoint, cache tracking)
+- **v0.32** — Structured errors (T1xxx–T6xxx), "Did you mean?" suggestions, audit log, RLS, GDPR erasure, online DDL, plan guides, VACUUM, compaction scheduling, WAL management
 
-### ~~Phase 1: Observability & Diagnostics~~ (Done)
+- **v0.33** — SQL completeness (multi-value INSERT, subqueries, OFFSET, IF EXISTS, FULL OUTER JOIN, upsert, RETURNING, persistent sessions)
+- **v0.34–v0.35** — Advanced SQL (recursive CTEs, foreign keys, materialized views, generated columns, triggers, UDFs, native date/time, JSON/JSONB)
+- **v0.36–v0.38** — Performance (query parallelism, batch writes, external merge sort, expression compilation, Zstd compression)
+- **v0.39–v0.41** — Enterprise security (TLS/mTLS, encryption key rotation, column-level encryption, audit log tamper detection)
+- **v0.42–v0.45** — Distributed & cloud (Raft consensus, object store backend, WAL replication, C FFI)
+- **v0.46+** — Category differentiation (learned cost model, anomaly detection, graph queries)
 
-Surface the internals so users can answer "what is my database doing?" without guessing.
+### v1.0 Criteria
 
-- ~~**`SHOW STATS`** — SQL command exposing MetricsRegistry: cache hit rates, compaction stats, WAL size, bloom filter false positive rate, shard load distribution~~
-- ~~**`SHOW SLOW QUERIES`** — SQL-accessible slow query log with query text, duration, rows scanned, plan used~~
-- ~~**`SHOW ACTIVE QUERIES`** — List currently running queries with elapsed time and resource usage~~
-- ~~**`SHOW STORAGE`** — Per-shard memtable/SSTable/WAL disk space breakdown with level sizes and block cache stats~~
-- ~~**`SHOW COMPACTION STATUS`** — L0 file count, SSTable files per shard, level sizes, needs_compaction flag~~
-- ~~**Live query profiling** — Per-query latency histogram (p50/p99/avg), slow query log, cache hit/miss tracking~~
-- ~~**Health endpoint** — `/health` JSON endpoint on pgwire port+1 with uptime, shard count, cache hit rate, storage metrics~~
+SQL completeness, TLS, encryption key rotation, stable on-disk format, Jepsen testing, TPC-H/YCSB benchmarks, published packages on crates.io/PyPI/npm.
 
-### ~~Phase 2: Error Quality & Developer Experience~~ (Done)
-
-Make errors helpful instead of cryptic. Reduce friction for new users.
-
-- ~~**Structured error codes** — Stable numeric codes (`T1001 SYNTAX_ERROR`, `T2001 TABLE_NOT_FOUND`, etc.) for programmatic handling, mapped to categories (syntax, schema, constraint, execution, auth)~~
-- ~~**"Did you mean?" suggestions** — Levenshtein-based fuzzy matching for misspelled table names, column names, and function names~~
-- ~~**`SUGGEST INDEX FOR <query>`** — Analyze a query and recommend optimal indexes based on WHERE clauses, JOIN predicates, and ORDER BY columns~~
-- ~~**Strict mode** — `SET STRICT_MODE = ON` to fail on silent type coercion, truncation, and implicit NULL insertion~~
-- ~~**`VERIFY BACKUP <path>`** — Validate backup file integrity (checksums, SSTable format, WAL CRC) without restoring~~
-- ~~**`VACUUM`** — Reclaim space from tombstones, report tombstone count, trigger compaction~~
-- **Progress indicators** — Long-running operations (`COPY`, `BACKUP`, `RESTORE`, compaction, bulk INSERT) report rows processed, bytes written, ETA
-- **CLI autocomplete** — Context-aware TAB completion for function names and column names in the interactive shell
-
-### ~~Phase 3: Security & Audit~~ (Done)
-
-Enterprise-grade security beyond basic RBAC.
-
-- ~~**Audit log** — Append-only log of all DDL changes, auth events, policy changes, and GDPR erasures, queryable via `SHOW AUDIT LOG` or `SELECT * FROM __audit_log`~~
-- ~~**Row-level security** — `CREATE POLICY` for per-row access control based on session user, role, or arbitrary predicates~~
-- ~~**GDPR erasure** — `FORGET KEY '<key>' FROM <table>` to erase all temporal versions of a record while preserving ledger structure~~
-- **Key rotation** — Rotate encryption keys without downtime: re-encrypt WAL and SSTables in background, track key versions per file
-- **Column-level encryption** — `CREATE TABLE ... (ssn TEXT ENCRYPTED)` for encrypting sensitive columns at rest with per-column keys
-
-### ~~Phase 4: Operational Maturity~~ (Done)
-
-Production-hardening for teams running TensorDB in real workloads.
-
-- ~~**Per-query resource limits** — `SET QUERY_TIMEOUT = 5000` and `SET QUERY_MAX_MEMORY = 268435456` to prevent runaway queries~~
-- ~~**Online DDL** — `ALTER TABLE DROP COLUMN`, `RENAME COLUMN` without table locks or downtime~~
-- ~~**Plan stability** — `CREATE PLAN GUIDE` to pin query plans and prevent regressions from stale statistics~~
-- ~~**Backup dry-run** — `RESTORE FROM '<path>' DRY_RUN` to validate a restore without writing data, showing what would change~~
-- ~~**Compaction scheduling** — User-configurable compaction windows (`SET COMPACTION_WINDOW = '02:00-06:00'`) to avoid peak-hour I/O~~
-- ~~**WAL size management** — Configurable WAL retention, automatic WAL archival, and `SHOW WAL STATUS` for monitoring~~
-
-### Phase 5: AI Runtime v2
-
-Next-generation AI capabilities tightly integrated with the query engine.
-
-- **Pluggable model backends** — ONNX Runtime, HTTP model servers, and the built-in pure-Rust engine behind a unified `ModelBackend` trait
-- **Anomaly detection** — Automatic detection of unusual write patterns, schema drift, and query performance regressions
-- **Pattern learning** — Learn access patterns over time to auto-tune cache policies, prefetch strategies, and compaction schedules
-- **Inference UDFs** — `SELECT predict(model_name, features...) FROM data` for in-database model inference
-- **Cross-shard correlation** — AI runtime correlates change events across shards for holistic insight synthesis
-
-### Phase 6: Cloud-Native & Scale
-
-From embedded to distributed.
-
-- **S3 storage backend** — Tiered storage with hot data on local SSD, cold data on S3-compatible object storage
-- **Compute-storage separation** — Stateless query nodes reading from shared storage
-- **gRPC transport** — Wire up `tensordb-distributed` with tonic/prost for actual multi-node deployment
-- **Helm chart & Kubernetes operator** — Deploy TensorDB clusters on Kubernetes with auto-scaling and self-healing
-- **ML Pipelines** — In-database feature store with point-in-time joins, model registry, training data export
-
-### v1.0 Stable Release
-
-- **Stable on-disk format** — Backward-compatible SSTable and WAL format with versioned headers
-- **Jepsen testing** — Formal verification of transaction isolation and crash recovery guarantees
-- **TPC-H / YCSB benchmarks** — Industry-standard benchmark results for credibility
-- **Semantic versioning** — No breaking API or format changes within major versions
-- **Migration tooling** — `tensordb-migrate` for upgrading on-disk format between major versions
-
-See the full changelog in [CHANGELOG.md](CHANGELOG.md) and architecture details in [design.md](design.md).
+See the full [roadmap](https://tensordb.io/roadmap) for details and [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Contributing
 

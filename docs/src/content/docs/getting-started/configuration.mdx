@@ -21,7 +21,6 @@ let db = Database::open("data", Config::default())?;
 let mut config = Config::default();
 config.memtable_max_bytes = 8 * 1024 * 1024;  // 8MB memtable
 config.shard_count = 8;                         // 8 shards
-config.ai_auto_insights = true;                 // Enable AI insights
 config.fast_write_enabled = true;               // Direct write path
 
 let db = Database::open("data", config)?;
@@ -58,20 +57,6 @@ config.block_cache_bytes = 128 * 1024 * 1024;   // 128MB block cache
 config.index_cache_entries = 4096;                // Cache more indexes
 config.bloom_bits_per_key = 14;                   // Lower false positives
 config.compaction_l0_threshold = 4;               // Compact sooner
-```
-
-### AI-Enabled
-
-For workloads that benefit from AI advisors:
-
-```rust
-let mut config = Config::default();
-config.ai_auto_insights = true;
-config.ai_inline_risk_assessment = true;
-config.ai_annotate_reads = true;
-config.ai_compaction_advisor = true;
-config.ai_cache_advisor = true;
-config.ai_access_stats_size = 4096;  // Track more keys
 ```
 
 ## Validation

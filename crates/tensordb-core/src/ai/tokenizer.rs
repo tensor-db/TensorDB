@@ -107,7 +107,13 @@ impl BpeTokenizer {
             "<|im_end|>",
             "<|endoftext|>",
             "<|im_sep|>",
-            "<|EOT|>", // DeepSeek models
+            "<|EOT|>",     // DeepSeek models
+            "<tool_call>", // Hermes-style tool calling
+            "</tool_call>",
+            "<tools>",
+            "</tools>",
+            "<tool_result>",
+            "</tool_result>",
         ];
         for token_str in &chatml_tokens {
             if let Some(&id) = token_to_id.get(token_str.as_bytes()) {

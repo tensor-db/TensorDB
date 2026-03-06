@@ -41,10 +41,6 @@ let mut feed = db.subscribe_prefix("orders/")?;
 - **Event processing**: Trigger business logic on data changes
 - **Audit logging**: Record all mutations for compliance
 
-## AI Isolation
-
-AI-generated data (under `__ai/` prefix) is **excluded** from change feeds. Subscribers only see user-written data.
-
 ## Impact on Write Path
 
 When subscribers are active, the write path falls back from the fast path to the channel path to ensure event delivery. This adds ~160µs per write.
@@ -52,5 +48,4 @@ When subscribers are active, the write path falls back from the fast path to the
 ```rust
 // has_subscribers flag is set eagerly when:
 // 1. db.subscribe() is called
-// 2. AI auto-insights are enabled (internal subscriber)
 ```

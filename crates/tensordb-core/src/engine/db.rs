@@ -20,7 +20,9 @@ use crate::engine::shard::{
 };
 use crate::error::{Result, TensorError};
 use crate::native_bridge::{build_hasher, Hasher};
-use crate::sql::exec::{execute_sql, PreparedStatement, SqlResult};
+use crate::sql::exec::{
+    execute_sql, execute_sql_with_session, PreparedStatement, SqlResult, SqlSessionHandle,
+};
 use crate::storage::cache::{BlockCache, IndexCache};
 use crate::storage::group_wal::{DurabilityThread, WalBatchQueue};
 use crate::storage::manifest::Manifest;
@@ -113,6 +115,7 @@ pub struct Database {
     active_queries: Arc<Mutex<HashMap<u64, ActiveQuery>>>,
     next_query_id: Arc<AtomicU64>,
     audit_log: Arc<crate::auth::audit::AuditLog>,
+    key_manager: Arc<crate::storage::key_manager::KeyManager>,
     compaction_window: Arc<parking_lot::RwLock<Option<(u8, u8)>>>,
 }
 
@@ -293,6 +296,15 @@ impl Database {
             config.slow_query_threshold_us,
         ));
 
+        let key_manager = Arc::new({
+            let km = crate::storage::key_manager::KeyManager::new();
+            if let Some(ref passphrase) = config.encryption_passphrase {
+                let key = crate::storage::encryption::EncryptionKey::from_passphrase(passphrase);
+                km.rotate_key(key);
+            }
+            km
+        });
+
         Ok(Self {
             root,
             config,
@@ -313,6 +325,7 @@ impl Database {
             active_queries: Arc::new(Mutex::new(HashMap::new())),
             next_query_id: Arc::new(AtomicU64::new(1)),
             audit_log: Arc::new(crate::auth::audit::AuditLog::new()),
+            key_manager,
             compaction_window: Arc::new(parking_lot::RwLock::new(None)),
         })
     }
@@ -457,6 +470,51 @@ impl Database {
         Ok(result)
     }
 
+    /// Write a batch of entries atomically with a single commit timestamp.
+    /// All entries share the same epoch, making the batch appear as a single commit.
+    pub fn write_batch_atomic(&self, entries: Vec<WriteBatchItem>) -> Result<u64> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+
+        // Allocate a single epoch for the entire batch
+        let commit_ts = self
+            .global_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+
+        // Group entries by shard
+        let mut by_shard: Vec<Vec<WriteBatchItem>> =
+            (0..self.config.shard_count).map(|_| Vec::new()).collect();
+        for entry in entries {
+            let shard_id = self.shard_for(&entry.user_key);
+            by_shard[shard_id].push(entry);
+        }
+
+        // Send batch commands to each shard
+        let mut receivers = Vec::new();
+        for (shard_id, shard_entries) in by_shard.into_iter().enumerate() {
+            if shard_entries.is_empty() {
+                continue;
+            }
+            let (tx, rx) = bounded(1);
+            self.shard_senders[shard_id]
+                .send(ShardCommand::WriteBatch {
+                    entries: shard_entries,
+                    resp: tx,
+                })
+                .map_err(|_| TensorError::ChannelClosed)?;
+            receivers.push(rx);
+        }
+
+        // Wait for all shards to complete
+        for rx in receivers {
+            rx.recv().map_err(|_| TensorError::ChannelClosed)??;
+        }
+
+        Ok(commit_ts)
+    }
+
     /// Subscribe to change events for keys matching a prefix.
     /// Returns a receiver that will receive ChangeEvent for each write.
     pub fn subscribe(&self, prefix: &[u8]) -> crossbeam_channel::Receiver<ChangeEvent> {
@@ -540,6 +598,48 @@ impl Database {
                 }
             }
         }
+
+        Ok(result)
+    }
+
+    /// Execute SQL using a persistent session handle, allowing transactions to
+    /// span multiple calls. Used by the pgwire server.
+    pub fn sql_session(&self, handle: &mut SqlSessionHandle, query: &str) -> Result<SqlResult> {
+        let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.active_queries.lock().insert(
+            query_id,
+            ActiveQuery {
+                query: if query.len() > 500 {
+                    format!("{}...", &query[..500])
+                } else {
+                    query.to_string()
+                },
+                started_at_ms: now_ms,
+                start_instant: Instant::now(),
+            },
+        );
+
+        let start = Instant::now();
+        let result = execute_sql_with_session(self, handle, query);
+
+        self.active_queries.lock().remove(&query_id);
+
+        let result = result?;
+        let elapsed_us = start.elapsed().as_micros() as u64;
+
+        self.metrics
+            .slow_query_log()
+            .record(query, elapsed_us, None);
+        self.metrics
+            .counter("queries_total")
+            .fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .histogram("query_latency_us")
+            .record(elapsed_us);
 
         Ok(result)
     }
@@ -883,6 +983,10 @@ impl Database {
 
     pub fn audit_log(&self) -> &Arc<crate::auth::audit::AuditLog> {
         &self.audit_log
+    }
+
+    pub fn key_manager(&self) -> &Arc<crate::storage::key_manager::KeyManager> {
+        &self.key_manager
     }
 
     pub fn compaction_window(&self) -> Option<(u8, u8)> {

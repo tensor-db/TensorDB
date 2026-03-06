@@ -18,6 +18,7 @@ pub async fn handle_connection(
     db: Arc<Database>,
     conn_id: u32,
     tls_acceptor: Option<Arc<tokio_rustls::TlsAcceptor>>,
+    require_tls: bool,
 ) {
     let peer = stream
         .peer_addr()
@@ -75,8 +76,15 @@ pub async fn handle_connection(
                 return;
             }
             write_buf.clear();
+            if require_tls {
+                error!("rejecting connection: TLS required but not configured (id={conn_id})");
+                return;
+            }
             run_connection(reader, writer, db, conn_id, read_buf).await;
         }
+    } else if require_tls {
+        // TLS required but client didn't send SSL request
+        error!("rejecting non-TLS connection (ssl-mode=require, id={conn_id})");
     } else {
         // Not an SSL request — continue plaintext
         run_connection(reader, writer, db, conn_id, read_buf).await;

@@ -14,8 +14,6 @@
 
 | Suite | Coverage |
 |-------|----------|
-| `ai_core.rs` | AI runtime: insight synthesis, risk scoring, access stats, isolation from user change feeds |
-| `ai_sql_functions.rs` | SQL-level AI functions: `EXPLAIN AI`, AI dashboard queries |
 | `auth_rbac.rs` | Authentication, role-based access control, permissions, sessions |
 | `bitemporal.rs` | Bitemporal queries: `AS OF`, `VALID AT`, combined filters |
 | `change_feeds.rs` | Change feed subscriptions, prefix filtering, durable cursors, consumer groups |
@@ -68,10 +66,9 @@ A build is acceptable when all of the following pass:
 2. `cargo clippy --workspace --all-targets -- -D warnings` — no lint warnings
 3. `cargo test --workspace --all-targets` — all 270+ tests pass
 4. `cargo test --workspace --all-targets --features native` — passes with C++ acceleration
-5. `./scripts/ai_overhead_gate.sh` — AI overhead within regression thresholds
-6. WAL fault-injection tests pass (CRC mismatch + torn tail recovery)
-7. Temporal stress tests pass with forced flush/compaction/reopen cycles
-8. README example tests pass (`tests/readme_examples.rs`)
+5. WAL fault-injection tests pass (CRC mismatch + torn tail recovery)
+6. Temporal stress tests pass with forced flush/compaction/reopen cycles
+7. README example tests pass (`tests/readme_examples.rs`)
 
 ## Test Layers
 
@@ -113,7 +110,7 @@ A build is acceptable when all of the following pass:
 - **Temporal:** AS OF, VALID AT, all SQL:2011 temporal clause variants
 - **Transactions:** BEGIN/COMMIT/ROLLBACK, transaction-local reads, rollback correctness
 - **Data interchange:** COPY TO/FROM CSV/JSON/Parquet, table functions (read_csv, read_json, read_parquet)
-- **Introspection:** SHOW TABLES, DESCRIBE, EXPLAIN, EXPLAIN ANALYZE, EXPLAIN AI, ANALYZE, SHOW WAL STATUS, SHOW AUDIT LOG, SHOW PLAN GUIDES
+- **Introspection:** SHOW TABLES, DESCRIBE, EXPLAIN, EXPLAIN ANALYZE, ANALYZE, SHOW WAL STATUS, SHOW AUDIT LOG, SHOW PLAN GUIDES
 - **Administration:** SET STRICT_MODE/QUERY_TIMEOUT/QUERY_MAX_MEMORY/COMPACTION_WINDOW, SUGGEST INDEX, VERIFY BACKUP, VACUUM, RESTORE DRY_RUN
 - **Prepared statements:** $1/$2 parameter binding, execution with parameters
 
@@ -125,17 +122,7 @@ A build is acceptable when all of the following pass:
 - **Event sourcing:** Event stores, append with sequence numbering, aggregate projection, snapshots, idempotency
 - **Schema evolution:** Migration register/apply/rollback, schema versioning, schema diff
 
-### F) AI Runtime
-
-- Auto-insight generation is asynchronous and in-process
-- Insight writes are immutable internal facts under `__ai/insight/...`
-- User change-feed subscribers never receive AI internal writes
-- Inline risk scoring produces valid scores on writes
-- AI advisor recommendations are generated
-- `EXPLAIN AI` returns insights for a key
-- AI overhead stays within regression gate thresholds
-
-### G) Authentication & Security
+### F) Authentication & Security
 
 - User creation, authentication, password change, disable
 - Role creation, permission grants, role-based access
@@ -146,14 +133,13 @@ A build is acceptable when all of the following pass:
 - GDPR erasure: FORGET KEY tombstones all versions, audit log integration
 - Structured error codes: T1xxx syntax, T2xxx schema, T3xxx constraint, T4xxx execution, T6xxx auth
 
-### H) Change Data Capture
+### G) Change Data Capture
 
 - Prefix-filtered subscriptions receive matching writes
 - Durable cursors persist position and resume after restart
 - Consumer groups with shard assignment and rebalancing
-- AI writes filtered from user-facing feeds
 
-### I) Native Integration
+### H) Native Integration
 
 - Rust/native deterministic output equivalence for fixture inputs
 - Native call path instrumentation confirms invocation
@@ -171,7 +157,6 @@ Sweep across key parameters:
 | `bloom_bits_per_key` | 8, 10, 14 |
 | `fast_write_enabled` | true, false |
 | `fast_write_wal_batch_interval_us` | 100, 1000, 5000 |
-| `ai_auto_insights` | false, true |
 
 Collect per run:
 - Write throughput (ops/s) and latency distribution
@@ -201,18 +186,15 @@ Use `scripts/overnight_iterate.sh` with:
 - `ROUNDS >= 12`
 - Mixed write/read workloads
 - Periodic reopen/checkpoint behavior
-- AI features enabled for subset of rounds
-
 Required outcomes:
 - No crashes or panics
 - No invariant violations
 - No data loss across reopen cycles
 - Stable p99 without unbounded degradation
-- AI overhead within gate thresholds
 
 ## Regression Policy
 
-Any PR touching storage, WAL, write path, temporal semantics, SQL engine, or AI runtime must include:
+Any PR touching storage, WAL, write path, temporal semantics, or SQL engine must include:
 - Updated or new tests covering the change
 - Benchmark delta evidence (before/after)
 - Note on whether temporal semantics were impacted

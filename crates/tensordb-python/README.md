@@ -1,6 +1,6 @@
 # tensordb
 
-Python bindings for [TensorDB](https://github.com/tensor-db/tensorDB) — an AI-native, bitemporal ledger database with MVCC, SQL, and LSM storage.
+Python bindings for [TensorDB](https://github.com/tensor-db/tensorDB) — a bitemporal ledger database with MVCC, SQL, and LSM storage.
 
 ## Install
 

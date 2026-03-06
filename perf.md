@@ -35,16 +35,6 @@ cargo run -p tensordb-cli -- --path /tmp/bench bench \
   --write-ops 100000 --read-ops 50000 --keyspace 20000 --read-miss-ratio 0.20
 ```
 
-### AI Overhead Gate
-
-CI runs an overhead regression check on every push:
-
-```bash
-./scripts/ai_overhead_gate.sh
-```
-
-Thresholds: max 90% write throughput drop, max 150% increase in p95/p99 latency when AI features are enabled vs disabled.
-
 ---
 
 ## Why Reads Are Fast (276 ns)
@@ -117,19 +107,6 @@ The `DurabilityThread` runs in the background, batching WAL frames across all sh
 | `compaction_size_ratio` | 10 | Each level is this many times larger than the previous. Standard LSM ratio. |
 | `compaction_max_levels` | 7 | Maximum levels (L0 through L6). More levels = better space amplification for large datasets. |
 
-### AI Parameters
-
-| Parameter | Default | Trade-off |
-|-----------|---------|-----------|
-| `ai_auto_insights` | false | Enable background insight synthesis from change feeds. Adds background CPU/IO work. |
-| `ai_batch_window_ms` | 20 | Lower = fresher insights, more processing overhead. Higher = better batching efficiency, staler insights. |
-| `ai_batch_max_events` | 16 | Lower = smaller batch size, less burst cost. Higher = better amortization of synthesis. |
-| `ai_inline_risk_assessment` | false | Enables synchronous risk scoring on every write. Adds latency to the write path. |
-| `ai_annotate_reads` | false | Annotate read results with AI metadata. Adds overhead to reads. |
-| `ai_compaction_advisor` | false | AI-driven compaction scheduling recommendations. |
-| `ai_cache_advisor` | false | AI-driven cache size tuning based on access patterns. |
-| `ai_access_stats_size` | 1024 | Ring buffer size for hot-key tracking. Larger = more accurate hot-key detection, more memory. |
-
 ---
 
 ## Performance Characteristics
@@ -173,8 +150,6 @@ EXPLAIN ANALYZE SELECT * FROM orders ORDER BY created_at DESC LIMIT 10;
 -- Table statistics (used by cost-based planner)
 ANALYZE orders;
 
--- AI insights for a key
-EXPLAIN AI 'orders/ord-123';
 ```
 
 ### CLI Benchmark Output
@@ -185,7 +160,6 @@ The CLI `bench` command reports:
 - Bloom miss rate
 - mmap block read count
 - Hasher path (rust/native)
-- AI runtime counters (when `--ai-auto-insights` is enabled)
 
 ### External Profiling
 

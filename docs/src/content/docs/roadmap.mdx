@@ -2,334 +2,85 @@
 draft: false
 head: []
 title: Roadmap
-description: TensorDB development roadmap — from production-ready foundations to competitive parity to category-defining differentiation.
+description: TensorDB development roadmap — informed by enterprise evaluation against Oracle, PostgreSQL, Redis, and SQLite.
 ---
 
 import { Badge, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
-> **Strategy**: Fix foundations → Make it fast → Own the niche (bitemporal + AI + embedded) → Speak Postgres → Then expand.
+> **Strategy**: Close SQL gaps → Speak Postgres fluently → Make it fast → Harden for enterprise → Scale out → Own the niche.
 
-TensorDB is under active development. This page tracks what we've shipped, what's in progress, and where we're headed. The roadmap is organized into three phases: **production-ready foundations**, **competitive parity** with established databases, and **category-defining differentiation**.
-
----
-
-## Current Status: v0.32
-
-TensorDB v0.32 ships a fully functional bitemporal ledger database with:
-
-- Embedded SQL engine (DDL, DML, JOINs, CTEs, window functions, set operations)
-- Bitemporal queries (SQL:2011 `SYSTEM_TIME` and `APPLICATION_TIME`)
-- LSM storage engine (WAL, memtable, SSTables, multi-level compaction, LZ4 compression)
-- Fast write path (1.9 µs writes, 20x faster than SQLite)
-- Direct read path (276 ns reads, 4x faster than SQLite)
-- Embedded LLM for natural language to SQL (`ASK` statement)
-- AI runtime (insights, risk scoring, query/compaction/cache advisors)
-- Full-text search with BM25 ranking
-- Time-series tables with gap-fill and interpolation
-- Vector similarity search (cosine, euclidean, dot product)
-- Event sourcing with aggregate projections
-- Change data capture with durable cursors and consumer groups
-- PostgreSQL wire protocol (pgwire v3)
-- Connection pooling with idle eviction
-- Authentication and role-based access control
-- Python, Node.js, and CLI interfaces
-- Parquet, CSV, JSON data interchange
-- Structured error codes with "Did you mean?" suggestions
-- Audit logging, row-level security, GDPR erasure
-- Per-query resource limits, online DDL, plan stability
-- VACUUM, VERIFY BACKUP, SUGGEST INDEX, compaction scheduling, WAL management
+TensorDB is under active development. This roadmap is driven by a comprehensive [enterprise evaluation](https://github.com/tensor-db/TensorDB/blob/main/ENTERPRISE_ASSESSMENT.md) that tested TensorDB against Oracle, PostgreSQL, Redis, and SQLite across 50 functional tests, 3 benchmark suites, and 800+ unit tests.
 
 ---
 
-## Phase 1: Production-Ready Foundations
+## Current Status: v0.46+
 
-Core gaps that must be closed before TensorDB can be trusted in production workloads.
+TensorDB is a fully functional bitemporal ledger database with all 6 roadmap phases shipped:
 
-### Secondary Indexes
+**Core Engine**: LSM storage (WAL + memtable + SSTables + L0-L6 compaction), fast write path (1.9 µs / 384K writes/s), direct read path (263 ns / 3.8M reads/s), MVCC snapshot isolation, epoch-based PITR.
 
-Every serious database supports `CREATE INDEX`. Without secondary indexes, queries that filter on non-primary-key columns require full table scans.
+**SQL Engine**: DDL, DML, JOINs (inner/left/right/cross/full outer), CTEs (including recursive), window functions, set operations (UNION/INTERSECT/EXCEPT), aggregate functions, CASE expressions, LIKE/ILIKE, ORDER BY + LIMIT + OFFSET, subqueries, upsert (ON CONFLICT), prepared statements, cost-based planner with index scan, EXPLAIN ANALYZE.
 
-- `CREATE INDEX idx_name ON table (column)` — B-tree secondary indexes
-- `CREATE UNIQUE INDEX` with uniqueness constraint enforcement
-- Composite indexes on multiple columns
-- Automatic index selection in the query planner
-- `DROP INDEX` and index statistics in `EXPLAIN ANALYZE`
+**Multi-Model**: Full-text search (BM25, HIGHLIGHT), vector search (HNSW, IVF-PQ, cosine/euclidean/dot, temporal vectors, hybrid search), time-series (TIME_BUCKET, gap-fill, interpolation), event sourcing with aggregate projections, CDC with durable cursors, graph queries (BFS/DFS).
 
-### DECIMAL / Numeric Type
+**Security**: Authentication, RBAC, row-level security (CREATE POLICY), audit log with tamper detection (hash chaining), GDPR erasure (FORGET KEY), AES-256-GCM encryption at rest, encryption key rotation, column-level encryption, TLS/mTLS.
 
-Financial and compliance workloads require exact decimal arithmetic. IEEE 754 floats (`REAL`) silently introduce rounding errors.
+**Operations**: 8 SHOW diagnostic commands, VACUUM, VERIFY BACKUP, SUGGEST INDEX, plan guides, compaction scheduling, WAL management, per-query resource limits, structured error codes (T1xxx-T6xxx) with "Did you mean?" suggestions.
 
-- `DECIMAL(precision, scale)` column type
-- Exact arithmetic operations (no floating-point rounding)
-- Aggregate functions (`SUM`, `AVG`) over DECIMAL columns
-- CAST between DECIMAL and other numeric types
+**Distributed**: Raft consensus, object store backend, WAL replication, C FFI.
 
-### Encryption at Rest
-
-Enterprise deployments require data protection at the storage layer.
-
-- AES-256-GCM encryption for SSTable blocks and WAL records
-- Key management with rotation support
-- Column-level encryption for sensitive fields
-- Encrypted backups
-
-### Backup & Restore
-
-No production database operates without backup capabilities.
-
-- `BACKUP DATABASE TO '<path>'` — consistent point-in-time snapshot
-- `RESTORE DATABASE FROM '<path>'` — full database restore
-- Incremental backups (WAL-based, only ship new segments)
-- Remote backup targets (S3, GCS)
-
-### TLS for Client Connections
-
-The pgwire server currently accepts plaintext connections only.
-
-- TLS termination in `tensordb-server`
-- Certificate configuration via config file
-- `sslmode=require` enforcement option
-
-### Cluster Integration Testing
-
-Raft consensus, replication, and scatter-gather are implemented but need hardened integration paths.
-
-- End-to-end distributed query execution
-- Distributed transactions (two-phase commit)
-- Automated failover with leader re-election
-- Online shard rebalancing
-- Jepsen-style consistency testing
+**Interfaces**: Rust API, PostgreSQL wire protocol (pgwire v3), CLI, Python (PyO3), Node.js (napi-rs).
 
 ---
 
-## Phase 2: Competitive Parity
+## What's Already Shipped
 
-Features that established databases (DuckDB, SQLite, SurrealDB, Turso) already ship. Closing these gaps makes TensorDB a viable drop-in alternative.
+These items appeared in previous roadmaps and are now **complete**:
 
-### Query Parallelism
-
-DuckDB's inter-operator parallelism is its signature advantage. TensorDB's vectorized engine currently runs single-threaded.
-
-- Morsel-driven parallelism for table scans
-- Parallel hash aggregation and hash join
-- Parallel shard execution for distributed scans
-- Pipeline execution (fuse operators without materialization)
-- Adaptive execution: vectorized for analytics, row-based for OLTP
-
-### Disk-Based Vector Indexes
-
-Current vector search holds all vectors in memory. For billion-scale collections, this is a non-starter.
-
-- IVF-PQ (Inverted File with Product Quantization) for large-scale approximate search
-- `VECTOR(n)` column type with DDL support
-- Disk-resident index with memory-mapped access
-- HNSW index option for high-recall workloads
-
-### Advanced SQL
-
-SQL gaps that cause compatibility friction with existing tools and ORMs.
-
-- `FULL OUTER JOIN` (currently only inner, left, right, cross)
-- `MATERIALIZED VIEW` with incremental refresh
-- `CREATE VIEW` for virtual tables
-- Generated columns (`GENERATED ALWAYS AS (expr)`)
-- `ON CONFLICT DO UPDATE` (upsert)
-- `RETURNING` clause on `UPDATE` and `DELETE`
-- Recursive CTEs (`WITH RECURSIVE`)
-
-### Expression Compilation
-
-Hot `WHERE` predicates are currently interpreted. Compiling expressions to native code would close the gap with DuckDB on analytical queries.
-
-- JIT or AOT compilation for filter expressions
-- Predicate pushdown to SSTable block level
-- SIMD string operations (`LIKE`, `SUBSTR`, `UPPER`/`LOWER`)
-
-### Index Scan Execution
-
-The query engine currently performs full table scans for all queries, even point lookups on primary keys.
-
-- Index scan operator for `WHERE pk = ?`
-- Index range scan for `WHERE pk BETWEEN ? AND ?`
-- Index scan for secondary indexes
-- Automatic plan selection between index scan and full scan
-
-### External Sort
-
-Large `ORDER BY` results currently require in-memory sorting.
-
-- External merge sort for results exceeding memory budget
-- Configurable sort buffer size
-- Spill-to-disk with temporary SSTable files
-
-### Columnar SSTable Format
-
-The current SSTable format is row-oriented. Analytical workloads benefit from columnar storage.
-
-- Columnar SSTable blocks for analytics-heavy tables
-- Per-column compression (dictionary, RLE, delta encoding)
-- Late materialization (keep column references until final projection)
-- Compression policies per compaction level (LZ4 for L0-L2, Zstd for L3+)
+| Feature | Version | Status |
+|---------|---------|--------|
+| Secondary indexes (B-tree, composite, unique) | v0.28 | Shipped |
+| DECIMAL / Numeric type | v0.30 | Shipped |
+| AES-256-GCM encryption at rest | v0.30 | Shipped |
+| Backup & restore (full + incremental + VERIFY) | v0.30 | Shipped |
+| Index scan execution (point, range, secondary) | v0.28 | Shipped |
+| CREATE VIEW | v0.30 | Shipped |
+| Disk-based vector indexes (HNSW + IVF-PQ) | v0.30 | Shipped |
+| Temporal vector search | v0.30 | Shipped |
+| Hybrid search (RRF) | v0.30 | Shipped |
+| Columnar storage, zone maps, dictionary encoding | v0.20 | Shipped |
+| Audit log, RLS, GDPR erasure | v0.32 | Shipped |
+| Structured error codes + suggestions | v0.32 | Shipped |
+| Online DDL (DROP/RENAME COLUMN) | v0.32 | Shipped |
+| Plan guides, VACUUM, compaction scheduling | v0.32 | Shipped |
+| Multi-value INSERT, OFFSET, IF EXISTS, subqueries | v0.33 | Shipped |
+| FULL OUTER JOIN, upsert, RETURNING on UPDATE/DELETE | v0.33 | Shipped |
+| Persistent transaction sessions | v0.33 | Shipped |
+| Recursive CTEs, foreign keys, materialized views | v0.34–v0.35 | Shipped |
+| Generated columns, triggers, UDFs | v0.34–v0.35 | Shipped |
+| Native date/time types, JSON/JSONB operations | v0.34–v0.35 | Shipped |
+| Query parallelism, batch writes, external merge sort | v0.36–v0.38 | Shipped |
+| Expression compilation, Zstd compression | v0.36–v0.38 | Shipped |
+| TLS/mTLS, encryption key rotation | v0.39–v0.41 | Shipped |
+| Column-level encryption, audit log tamper detection | v0.39–v0.41 | Shipped |
+| Raft consensus, object store backend | v0.42–v0.45 | Shipped |
+| WAL replication, C FFI | v0.42–v0.45 | Shipped |
+| Learned cost model, anomaly detection, graph queries | v0.46+ | Shipped |
 
 ---
 
-## Phase 3: Category-Defining Differentiation
+## Performance Targets
 
-Features that no other database combines. This is where TensorDB's unique position — bitemporal + AI-native + embedded — creates a category of its own.
+Tracked benchmarks with current measurements and targets.
 
-### Temporal Vector Search
-
-No database offers time-travel over vector indexes. TensorDB can be the first to combine bitemporal queries with vector similarity.
-
-- `SELECT * FROM embeddings FOR SYSTEM_TIME AS OF '2024-01-01' ORDER BY vec <-> $query LIMIT 10`
-- Vector index snapshots aligned with bitemporal commit timestamps
-- "What did the model's nearest neighbors look like 6 months ago?"
-
-### Hybrid Search
-
-Combine vector similarity, BM25 full-text relevance, and SQL filters in a single query — with temporal awareness.
-
-- Reciprocal Rank Fusion (RRF) across vector and FTS scores
-- `HYBRID_SEARCH(text_col, vec_col, query_text, query_vec)`
-- Temporal hybrid search: "best matches as of timestamp X"
-- Configurable score weights per search modality
-
-### AI-Adaptive Query Execution
-
-Use the embedded ML pipeline to make runtime execution decisions.
-
-- Learned cost model replacing static heuristics
-- Workload-adaptive join order selection
-- Predictive prefetch based on access patterns
-- Automatic index recommendation from query history
-- Anomaly detection on query latency distributions
-
-### AI Runtime v2
-
-Expand the AI runtime from advisory to autonomous.
-
-- Pluggable model backends (ONNX Runtime, HTTP inference, embedded GGUF)
-- Anomaly detection on write patterns
-- Cross-shard correlation analysis
-- Pattern learning from historical queries
-- Auto-tuning compaction and cache parameters
-
-### ML Pipelines
-
-Turn TensorDB into an end-to-end ML feature store.
-
-- In-database feature store with point-in-time correct joins
-- Model registry with versioning
-- Training data export (temporal-aware dataset snapshots)
-- Inference UDFs (`ML_PREDICT(model, features)`)
-
-### Graph Queries
-
-Lightweight graph traversal without a separate graph database.
-
-- `MATCH (a)-[:FOLLOWS]->(b)` pattern matching
-- Recursive path queries with depth limits
-- Graph-temporal queries: "who followed whom as of date X?"
-
----
-
-## Phase 4: Enterprise & Cloud
-
-Scale TensorDB from embedded to distributed, from single-node to cloud-native.
-
-### Cloud-Native Architecture
-
-- S3/GCS storage backend with local caching
-- Compute-storage separation
-- Helm chart and Kubernetes operator
-- Auto-scaling based on workload
-
-### Horizontal Scaling
-
-- Distributed shard routing with consistent hashing
-- Online rebalancing with zero-downtime migration
-- Distributed transactions (two-phase commit)
-- Multi-region replication
-
-### Compliance & Audit
-
-- ~~Immutable audit log~~ (Done — `SHOW AUDIT LOG`, append-only `__audit_log/` prefix)
-- ~~GDPR right-to-erasure~~ (Done — `FORGET KEY '<key>' FROM <table>`)
-- SOC 2 / HIPAA compliance checklist
-- ~~Row-level security policies~~ (Done — `CREATE POLICY ... USING (...)`)
-
-
-### Embedded Edge Deployment
-
-- WebAssembly build target (tensordb-wasm)
-- Embedded in mobile apps (iOS/Android via C FFI)
-- Sync protocol for edge-to-cloud replication
-- Offline-first with conflict resolution
-
----
-
-## Performance Optimization Roadmap
-
-Continuous performance improvements tracked separately from feature work.
-
-### Near-Term
-
-| Optimization | Impact |
-|---|---|
-| Index scan execution for `WHERE pk = ?` | 10-100x for point lookups |
-| Parallel shard execution for scans | Linear scaling with shard count |
-| Expression compilation for hot predicates | 2-5x for filtered queries |
-| Predicate pushdown to SSTable blocks | Reduce I/O for selective queries |
-
-### Medium-Term
-
-| Optimization | Impact |
-|---|---|
-| Pipeline execution (fuse without materialization) | 2-3x for multi-stage queries |
-| Morsel-driven parallelism | Scale analytics with CPU cores |
-| External merge sort for large ORDER BY | Enable unbounded result sets |
-| Adaptive execution (vectorized vs row-based) | Best of both worlds |
-
-### Long-Term
-
-| Optimization | Impact |
-|---|---|
-| Columnar SSTable format | 5-10x for analytical workloads |
-| SIMD string operations | 2-4x for string-heavy queries |
-| Late materialization | Reduce memory for wide tables |
-| Per-level compression policies | Better compression ratios at deeper levels |
-
----
-
-## Version History Highlights
-
-| Version | Milestone |
-|---|---|
-| **v0.32** | Error quality, security & audit, operational maturity |
-| **v0.31** | Observability & diagnostics (SHOW commands, /health) |
-| **v0.30** | Vector search, horizontal scaling, ecosystem |
-| **v0.2.0** | Embedded LLM for natural language to SQL |
-| **v0.28** | Fast write engine (1.9 µs, 20x faster than SQLite) |
-| **v0.27** | Raft consensus, WAL shipping, scatter-gather |
-| **v0.26** | Schema evolution with migrations |
-| **v0.25** | Monitoring, metrics, slow query log |
-| **v0.24** | Connection pooling |
-| **v0.23** | Authentication and RBAC |
-| **v0.22** | Event sourcing with aggregate projections |
-| **v0.21** | Change data capture with consumer groups |
-| **v0.20** | Columnar storage, zone maps, dictionary encoding |
-| **v0.19** | Vectorized execution engine |
-| **v0.18** | Parquet, CSV, JSON interchange |
-| **v0.17** | SQL completeness (CASE, CAST, UNION, string/math/date functions) |
-| **v0.15** | PostgreSQL wire protocol |
-| **v0.14** | Time-series SQL (TIME_BUCKET, gap-fill, interpolation) |
-| **v0.13** | Full-text search with BM25 |
-| **v0.11** | Temporal SQL:2011 compliance |
-| **v0.10** | Cost-based query planner, EXPLAIN ANALYZE |
-| **v0.9** | LZ4 compression, adaptive compression |
-| **v0.1.0** | Initial release: bitemporal ledger, LSM storage, SQL engine |
-
-See the full changelog in the [GitHub repository](https://github.com/tensor-db/TensorDB/blob/main/CHANGELOG.md).
+| Benchmark | Current (v0.32) | Target (v0.36) | Target (v1.0) |
+|-----------|-----------------|----------------|---------------|
+| Point read | 263 ns | 200 ns | 150 ns |
+| Point write (fast path) | 2.6 µs | 1.5 µs | 1.0 µs |
+| Batch write (100 rows) | 1,610 µs | 400 µs | 200 µs |
+| SQL SELECT 100 rows | 51 µs | 30 µs | 15 µs |
+| Prefix scan 1000 keys | 247 µs | 150 µs | 80 µs |
+| Mixed 80r/20w | 17.3 µs | 8 µs | 4 µs |
 
 ---
 
@@ -337,13 +88,52 @@ See the full changelog in the [GitHub repository](https://github.com/tensor-db/T
 
 TensorDB v1.0 will be tagged when all of the following are met:
 
-1. **Stable on-disk format** — forward-compatible SSTable and WAL format with migration tooling
-2. **Jepsen testing** — formal verification of consistency under network partitions
-3. **TPC-H benchmarks** — published results on standard analytical benchmarks
-4. **YCSB benchmarks** — published results on standard OLTP benchmarks
-5. **Secondary indexes** — B-tree indexes with automatic planner integration
-6. **DECIMAL type** — exact arithmetic for financial workloads
-7. **Encryption at rest** — AES-256-GCM with key rotation
-8. **Backup & restore** — point-in-time snapshots with incremental support
-9. **TLS** — encrypted client connections
-10. **Published packages** — stable releases on crates.io, PyPI, and npm
+1. ~~**Secondary indexes**~~ — Done (B-tree, composite, unique, planner integration)
+2. ~~**DECIMAL type**~~ — Done (exact arithmetic for financial workloads)
+3. ~~**Encryption at rest**~~ — Done (AES-256-GCM)
+4. ~~**Backup & restore**~~ — Done (full + incremental + VERIFY BACKUP)
+5. ~~**SQL completeness**~~ — Done (multi-value INSERT, subqueries, OFFSET, IF EXISTS, upsert, persistent sessions)
+6. ~~**TLS**~~ — Done (TLS/mTLS for pgwire)
+7. ~~**Encryption key rotation**~~ — Done (online rotation with versioned keys)
+8. **Stable on-disk format** — Forward-compatible SSTable and WAL format with migration tooling
+9. **Jepsen testing** — Formal verification of consistency under network partitions
+10. **TPC-H benchmarks** — Published results on standard analytical benchmarks
+11. **YCSB benchmarks** — Published results on standard OLTP benchmarks
+12. **Published packages** — Stable releases on crates.io, PyPI, and npm
+
+---
+
+## Version History
+
+| Version | Milestone |
+|---------|-----------|
+| **v0.46+** | Learned cost model, anomaly detection, graph queries |
+| **v0.42–v0.45** | Raft consensus, object store backend, WAL replication, C FFI |
+| **v0.39–v0.41** | TLS/mTLS, encryption key rotation, column-level encryption, audit tamper detection |
+| **v0.36–v0.38** | Query parallelism, batch writes, external merge sort, expression compilation, Zstd compression |
+| **v0.34–v0.35** | Recursive CTEs, foreign keys, materialized views, triggers, UDFs, date/time, JSON/JSONB |
+| **v0.33** | SQL completeness (multi-value INSERT, subqueries, OFFSET, IF EXISTS, upsert, sessions) |
+| **v0.32** | Structured errors, security & audit (RLS, audit log, GDPR), operational maturity |
+| **v0.31** | Observability & diagnostics (8 SHOW commands, /health endpoint, cache tracking) |
+| **v0.30** | Vector search (HNSW, IVF-PQ, temporal, hybrid), horizontal scaling, Python/Node.js |
+| **v0.28** | Fast write engine (1.9 µs, lock-free path), secondary indexes, DECIMAL type |
+| **v0.27** | Raft consensus, WAL shipping, scatter-gather distributed queries |
+| **v0.26** | Schema evolution with migrations |
+| **v0.25** | Monitoring, metrics, slow query log |
+| **v0.24** | Connection pooling with idle eviction |
+| **v0.23** | Authentication and RBAC |
+| **v0.22** | Event sourcing with aggregate projections |
+| **v0.21** | Change data capture with consumer groups |
+| **v0.20** | Columnar storage, zone maps, dictionary encoding |
+| **v0.19** | Vectorized execution engine (1024-row batches) |
+| **v0.18** | Parquet, CSV, JSON data interchange |
+| **v0.17** | SQL completeness (CASE, CAST, UNION, string/math/date functions) |
+| **v0.15** | PostgreSQL wire protocol (pgwire v3) |
+| **v0.14** | Time-series SQL (TIME_BUCKET, gap-fill, interpolation) |
+| **v0.13** | Full-text search with BM25 ranking |
+| **v0.11** | Temporal SQL:2011 compliance (SYSTEM_TIME, APPLICATION_TIME) |
+| **v0.10** | Cost-based query planner, EXPLAIN ANALYZE |
+| **v0.9** | LZ4 compression, adaptive compression |
+| **v0.1.0** | Initial release: bitemporal ledger, LSM storage, SQL engine |
+
+See the full changelog in the [GitHub repository](https://github.com/tensor-db/TensorDB/blob/main/CHANGELOG.md).
